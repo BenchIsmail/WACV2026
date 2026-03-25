@@ -223,6 +223,19 @@
         <div class="columns is-centered has-text-centered">
           <div class="column is-four-fifths">
             <h2 class="title is-3">Abstract</h2>
+
+            <!-- Image -->
+            <div class="has-text-centered" style="margin-bottom: 1.5rem;">
+              <figure>
+                <img src="static/images/ExampleFiducialMarkers.png" 
+                     alt="Classical fiducial markers"
+                     style="max-width: 80%; height: auto;">
+                <figcaption style="margin-top: 0.5rem; font-size: 0.9rem;">
+                  Classical fiducial markers
+                </figcaption>
+              </figure>
+            </div>
+            
             <div class="content has-text-justified">
               <p>
                 Classical single-image rectification methods usually rely on conspicuous landmarks or printed markers that can be degraded, removed, or visually alter the surface they protect. In this work, we propose autocorrelation-based fiducial markers for traceability. Our approach relies on textures whose local normalized autocorrelation exhibits a characteristic hexagonal structure, allowing the recovery of local geometric information from a single image. From these local observations, we estimate affine distortions and aggregate them to infer a global rectifying transformation. This framework is particularly relevant for traceability applications on packaging and bottles, where surfaces may be planar or curved and where visually intrusive codes are undesirable. The proposed method opens the way to robust and discreet identification patterns that remain compatible with challenging real imaging conditions.
@@ -233,20 +246,35 @@
       </div>
     </section>
 
-    <!-- Motivation -->
-    <section class="section">
-      <div class="container is-max-desktop">
-        <h2 class="title is-3 has-text-centered">Motivation</h2>
-        <div class="content has-text-justified">
-          <p>
-            In traceability applications, traditional visible identifiers such as QR codes or barcodes can be intentionally degraded, removed, or replaced. This issue is especially critical for high-value products such as wine bottles, where resale practices may rely on tampering with visible identifiers. Our goal is to design discreet fiducial textures that remain informative for geometric recovery while being harder to tear off or visually alter.
-          </p>
-          <p>
-            The problem becomes even more challenging on curved objects such as bottles, where perspective effects and surface curvature deform the observed texture. This motivates a method that estimates local geometric distortions from autocorrelation peaks and uses them to recover a meaningful global rectification.
-          </p>
-        </div>
+  <!-- Motivation -->
+  <section class="section">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Motivation</h2>
+  
+      <!-- Image -->
+      <div class="has-text-centered" style="margin-bottom: 1.5rem;">
+        <figure>
+          <img src="static/images/depositphotos.jpg" 
+               alt="Traceability problem on wine bottles"
+               style="max-width: 80%; height: auto;">
+          <figcaption style="margin-top: 0.5rem; font-size: 0.9rem;">
+            Traditional visible identifiers can be degraded or removed, especially on high-value products such as wine bottles.
+          </figcaption>
+        </figure>
       </div>
-    </section>
+  
+      <!-- Text -->
+      <div class="content has-text-justified">
+        <p>
+          In traceability applications, traditional visible identifiers such as QR codes or barcodes can be intentionally degraded, removed, or replaced. This issue is especially critical for high-value products such as wine bottles, where resale practices may rely on tampering with visible identifiers. Our goal is to design discreet fiducial textures that remain informative for geometric recovery while being harder to tear off or visually alter.
+        </p>
+        <p>
+          The problem becomes even more challenging on curved objects such as bottles, where perspective effects and surface curvature deform the observed texture. This motivates a method that estimates local geometric distortions from autocorrelation peaks and uses them to recover a meaningful global rectification.
+        </p>
+      </div>
+  
+    </div>
+  </section>
 
     <!-- Method -->
     <section class="section is-light">
@@ -284,7 +312,7 @@
             </div>
 
             <div class="item">
-              <img src="static/images/result2.png" alt="Local affinity estimation" loading="lazy">
+              <img src="static/images/homogr.001.png" alt="Local affinity estimation" loading="lazy">
               <h2 class="subtitle has-text-centered">
                 Local estimation of geometric distortions from autocorrelation peak configurations.
               </h2>

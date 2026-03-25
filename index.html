@@ -157,6 +157,39 @@
       min-height: 260px;
     }
   }
+  .poster-embed-desktop {
+    display: block;
+  }
+  
+  .poster-mobile-preview {
+    display: none;
+  }
+  
+  .poster-preview-img {
+    width: 100%;
+    max-width: 900px;
+    height: auto;
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+  }
+  
+  .poster-actions {
+    margin-top: 1rem;
+  }
+  
+  .poster-actions .button {
+    margin: 0.35rem;
+  }
+  
+  @media screen and (max-width: 768px) {
+    .poster-embed-desktop {
+      display: none;
+    }
+  
+    .poster-mobile-preview {
+      display: block;
+    }
+  }
 </style>
 <head>
   <meta charset="utf-8">
@@ -535,15 +568,57 @@
       </div>
     </section>
 
-    <!-- Poster -->
-    <section class="hero is-small">
-      <div class="hero-body">
-        <div class="container is-max-desktop">
-          <h2 class="title is-3 has-text-centered">Poster</h2>
-          <iframe src="static/pdfs/Poster___WACV-22.pdf" width="100%" height="550" title="Poster PDF"></iframe>
+  <!-- Poster -->
+  <section class="hero is-small">
+    <div class="hero-body">
+      <div class="container is-max-desktop">
+        <h2 class="title is-3 has-text-centered">Poster</h2>
+  
+        <!-- Desktop / tablet: embedded PDF -->
+        <div class="poster-embed-desktop">
+          <iframe
+            src="static/pdfs/Poster___WACV-22.pdf"
+            width="100%"
+            height="550"
+            title="Poster PDF"
+            loading="lazy"
+            style="border: none; border-radius: 12px;">
+          </iframe>
+        </div>
+  
+        <!-- Mobile: image preview + buttons -->
+        <div class="poster-mobile-preview has-text-centered">
+          <img
+            src="static/images/Poster___WACV-22_page-0001.jpg"
+            alt="Poster preview"
+            class="poster-preview-img"
+            loading="lazy">
+  
+          <div class="poster-actions">
+            <a href="static/pdfs/Poster___WACV-22.pdf"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="button is-dark is-rounded">
+              <span class="icon">
+                <i class="fas fa-file-pdf"></i>
+              </span>
+              <span>Open Poster PDF</span>
+            </a>
+  
+            <a href="static/images/Poster___WACV-22_page-0001.jpg"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="button is-light is-rounded">
+              <span class="icon">
+                <i class="fas fa-image"></i>
+              </span>
+              <span>Open Poster Image</span>
+            </a>
+          </div>
         </div>
       </div>
-    </section>
+    </div>
+  </section>
 
     <!-- BibTeX -->
     <section class="section" id="BibTeX">

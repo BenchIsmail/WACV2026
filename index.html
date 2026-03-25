@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
   <meta name="title" content="Autocorrelation-based Fiducial Markers for Traceability - Ismail Bencheikh, Max Dunitz, Marie D’AUTUME, Enric Meinhardt-Llopis, Marc Pic, Gabriele Facciolo, Pablo Musé">
-  <meta name="description" content="Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, robust local affinity estimation, and texture rectification on planar and curved surfaces.">
+  <meta name="description" content="Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, local affinity estimation, and texture rectification on planar and curved surfaces.">
   <meta name="keywords" content="WACV 2026, fiducial markers, autocorrelation, texture rectification, homography estimation, local affinities, traceability, computer vision">
   <meta name="author" content="Ismail Bencheikh, Max Dunitz, Marie D’AUTUME, Enric Meinhardt-Llopis, Marc Pic, Gabriele Facciolo, Pablo Musé">
   <meta name="robots" content="index, follow">
@@ -46,7 +46,6 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://ajax.googleapis.com">
-  <link rel="preconnect" href="https://documentcloud.adobe.com">
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
 
   <title>Autocorrelation-based Fiducial Markers for Traceability | WACV 2026</title>
@@ -72,7 +71,6 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 
   <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
-  <script defer src="https://documentcloud.adobe.com/view-sdk/main.js"></script>
   <script defer src="static/js/fontawesome.all.min.js"></script>
   <script defer src="static/js/bulma-carousel.min.js"></script>
   <script defer src="static/js/bulma-slider.min.js"></script>
@@ -83,7 +81,7 @@
     "@context": "https://schema.org",
     "@type": "ScholarlyArticle",
     "headline": "Autocorrelation-based Fiducial Markers for Traceability",
-    "description": "Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, robust local affinity estimation, and texture rectification on planar and curved surfaces.",
+    "description": "Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, local affinity estimation, and texture rectification on planar and curved surfaces.",
     "author": [
       { "@type": "Person", "name": "Ismail Bencheikh" },
       { "@type": "Person", "name": "Max Dunitz" },
@@ -109,6 +107,7 @@
   }
   </script>
 </head>
+
 <body>
 
   <button class="scroll-to-top" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
@@ -117,25 +116,42 @@
 
   <main id="main-content">
 
+    <!-- Title / Authors / Links -->
     <section class="hero">
       <div class="hero-body">
         <div class="container is-max-desktop">
           <div class="columns is-centered">
             <div class="column has-text-centered">
 
-              <h1 class="title is-1 publication-title">Autocorrelation-based Fiducial Markers for Traceability</h1>
+              <h1 class="title is-1 publication-title">
+                Autocorrelation-based Fiducial Markers for Traceability
+              </h1>
 
               <div class="is-size-5 publication-authors">
-                <span class="author-block">Ismail Bencheikh,</span>
-                <span class="author-block">Max Dunitz,</span>
-                <span class="author-block">Marie D’AUTUME,</span>
-                <span class="author-block">Enric Meinhardt-Llopis,</span>
-                <span class="author-block">Marc Pic,</span>
-                <span class="author-block">Gabriele Facciolo,</span>
-                <span class="author-block">Pablo Musé</span>
+                <span class="author-block">
+                  <a href="mailto:i.bencheikh@att-fr.com">Ismail Bencheikh</a>,
+                </span>
+                <span class="author-block">
+                  <a href="mailto:m.dunitz@att-fr.com">Max Dunitz</a>,
+                </span>
+                <span class="author-block">
+                  <a href="#" target="_blank" rel="noopener noreferrer">Marie D’AUTUME</a>,
+                </span>
+                <span class="author-block">
+                  <a href="#" target="_blank" rel="noopener noreferrer">Enric Meinhardt-Llopis</a>,
+                </span>
+                <span class="author-block">
+                  <a href="#" target="_blank" rel="noopener noreferrer">Marc Pic</a>,
+                </span>
+                <span class="author-block">
+                  <a href="#" target="_blank" rel="noopener noreferrer">Gabriele Facciolo</a>,
+                </span>
+                <span class="author-block">
+                  <a href="#" target="_blank" rel="noopener noreferrer">Pablo Musé</a>
+                </span>
               </div>
 
-              <div class="is-size-5 publication-authors" style="margin-top: 0.75rem;">
+              <div class="is-size-5 publication-authors" style="margin-top: 0.9rem;">
                 <span class="author-block">
                   Advanced Track &amp; Trace, Centre Borelli, Université Paris-Saclay, Université Paris Cité, ENS Paris-Saclay, CNRS, SSA, INSERM
                   <br>
@@ -143,38 +159,44 @@
                 </span>
               </div>
 
-              <div class="column has-text-centered">
-                <div class="publication-links">
+              <div class="publication-links" style="margin-top: 1.5rem;">
 
-                  <span class="link-block">
-                    <a href="static/pdfs/paper.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
-                      <span class="icon"><i class="fas fa-file-pdf"></i></span>
-                      <span>Paper</span>
-                    </a>
-                  </span>
+                <span class="link-block">
+                  <a href="static/pdfs/paper.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fas fa-file-pdf"></i>
+                    </span>
+                    <span>Paper</span>
+                  </a>
+                </span>
 
-                  <span class="link-block">
-                    <a href="static/pdfs/Poster___WACV-22.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
-                      <span class="icon"><i class="fas fa-image"></i></span>
-                      <span>Poster</span>
-                    </a>
-                  </span>
+                <span class="link-block">
+                  <a href="static/pdfs/Poster___WACV-22.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fas fa-image"></i>
+                    </span>
+                    <span>Poster</span>
+                  </a>
+                </span>
 
-                  <span class="link-block">
-                    <a href="https://www.youtube.com/watch?v=WxRhdRdvaAY&t=116s" target="_blank" class="external-link button is-normal is-rounded is-dark">
-                      <span class="icon"><i class="fab fa-youtube"></i></span>
-                      <span>Video</span>
-                    </a>
-                  </span>
+                <span class="link-block">
+                  <a href="https://www.youtube.com/watch?v=WxRhdRdvaAY&t=116s" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fab fa-youtube"></i>
+                    </span>
+                    <span>Video</span>
+                  </a>
+                </span>
 
-                  <span class="link-block">
-                    <a href="https://github.com/BenchIsmail/WACV2026" target="_blank" class="external-link button is-normal is-rounded is-dark">
-                      <span class="icon"><i class="fab fa-github"></i></span>
-                      <span>Code</span>
-                    </a>
-                  </span>
+                <span class="link-block">
+                  <a href="https://github.com/BenchIsmail/WACV2026" target="_blank" class="external-link button is-normal is-rounded is-dark">
+                    <span class="icon">
+                      <i class="fab fa-github"></i>
+                    </span>
+                    <span>Code</span>
+                  </a>
+                </span>
 
-                </div>
               </div>
 
             </div>
@@ -183,6 +205,7 @@
       </div>
     </section>
 
+    <!-- Teaser -->
     <section class="hero teaser">
       <div class="container is-max-desktop">
         <div class="hero-body">
@@ -194,6 +217,7 @@
       </div>
     </section>
 
+    <!-- Abstract -->
     <section class="section hero is-light">
       <div class="container is-max-desktop">
         <div class="columns is-centered has-text-centered">
@@ -209,6 +233,7 @@
       </div>
     </section>
 
+    <!-- Motivation -->
     <section class="section">
       <div class="container is-max-desktop">
         <h2 class="title is-3 has-text-centered">Motivation</h2>
@@ -223,6 +248,7 @@
       </div>
     </section>
 
+    <!-- Method -->
     <section class="section is-light">
       <div class="container is-max-desktop">
         <h2 class="title is-3 has-text-centered">Method Overview</h2>
@@ -237,6 +263,7 @@
       </div>
     </section>
 
+    <!-- Results -->
     <section class="hero is-small">
       <div class="hero-body">
         <div class="container">
@@ -244,28 +271,28 @@
           <div id="results-carousel" class="carousel results-carousel">
 
             <div class="item">
-              <img src="static/images/result1.png" alt="Texture and autocorrelation" loading="lazy"/>
+              <img src="static/images/result1.png" alt="Texture and autocorrelation" loading="lazy">
               <h2 class="subtitle has-text-centered">
                 Example of a generated fiducial texture and its characteristic autocorrelation structure.
               </h2>
             </div>
 
             <div class="item">
-              <img src="static/images/result2.png" alt="Local affinity estimation" loading="lazy"/>
+              <img src="static/images/result2.png" alt="Local affinity estimation" loading="lazy">
               <h2 class="subtitle has-text-centered">
                 Local estimation of geometric distortions from autocorrelation peak configurations.
               </h2>
             </div>
 
             <div class="item">
-              <img src="static/images/result3.png" alt="Rectification result" loading="lazy"/>
+              <img src="static/images/result3.png" alt="Rectification result" loading="lazy">
               <h2 class="subtitle has-text-centered">
                 Rectification result from aggregated local geometric observations.
               </h2>
             </div>
 
             <div class="item">
-              <img src="static/images/result4.png" alt="Curved surface example" loading="lazy"/>
+              <img src="static/images/result_cylindre.png" alt="Curved surface example" loading="lazy">
               <h2 class="subtitle has-text-centered">
                 Illustration on curved surfaces, motivating robust traceability on bottles and packaging.
               </h2>
@@ -276,30 +303,47 @@
       </div>
     </section>
 
+    <!-- Video -->
     <section class="hero is-small is-light">
       <div class="hero-body">
         <div class="container">
           <h2 class="title is-3">Video Presentation</h2>
           <div class="columns is-centered has-text-centered">
             <div class="column is-four-fifths">
+
               <div class="publication-video">
-                <iframe src="https://www.youtube-nocookie.com/embed/WxRhdRdvaAY?start=116" frameborder="0" allow="autoplay; encrypted-media" allowfullscreen></iframe>
+                <iframe
+                  src="https://www.youtube-nocookie.com/embed/WxRhdRdvaAY?start=116"
+                  title="WACV 2026 Video Presentation"
+                  frameborder="0"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  referrerpolicy="strict-origin-when-cross-origin"
+                  allowfullscreen>
+                </iframe>
               </div>
+
+              <p style="margin-top: 1rem;">
+                If the embedded player does not load, open the video directly here:
+                <a href="https://www.youtube.com/watch?v=WxRhdRdvaAY&t=116s" target="_blank">YouTube link</a>.
+              </p>
+
             </div>
           </div>
         </div>
       </div>
     </section>
 
+    <!-- Poster -->
     <section class="hero is-small">
       <div class="hero-body">
         <div class="container is-max-desktop">
           <h2 class="title is-3 has-text-centered">Poster</h2>
-          <iframe src="static/pdfs/Poster___WACV-22.pdf" width="100%" height="550"></iframe>
+          <iframe src="static/pdfs/Poster___WACV-22.pdf" width="100%" height="550" title="Poster PDF"></iframe>
         </div>
       </div>
     </section>
 
+    <!-- BibTeX -->
     <section class="section" id="BibTeX">
       <div class="container is-max-desktop content">
         <div class="bibtex-header">
@@ -319,11 +363,25 @@
       </div>
     </section>
 
+    <!-- Contact -->
+    <section class="section is-light">
+      <div class="container is-max-desktop">
+        <h2 class="title is-3 has-text-centered">Contact</h2>
+        <div class="content has-text-centered">
+          <p>
+            For questions regarding this work, please contact
+            <a href="mailto:i.bencheikh@att-fr.com">i.bencheikh@att-fr.com</a>.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
     <footer class="footer">
       <div class="container">
         <div class="columns is-centered">
           <div class="column is-8">
-            <div class="content">
+            <div class="content has-text-centered">
               <p>
                 This page was built using the
                 <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a>,
@@ -336,5 +394,6 @@
     </footer>
 
   </main>
+
 </body>
 </html>

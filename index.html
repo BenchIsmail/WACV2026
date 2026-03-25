@@ -1,5 +1,163 @@
 <!DOCTYPE html>
 <html lang="en">
+<style>
+  .hero-top-logos {
+    position: relative;
+    width: 100%;
+    height: 110px;
+    margin-bottom: 1rem;
+  }
+
+  .hero-top-logos .logo-left,
+  .hero-top-logos .logo-right {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    object-fit: contain;
+  }
+
+  .hero-top-logos .logo-left {
+    left: 0;
+    height: 120px;
+    max-width: 180px;
+  }
+
+  .hero-top-logos .logo-right {
+    right: 0;
+    height: 80px;
+    max-width: 320px;
+  }
+
+  .custom-teaser-img,
+  .custom-section-img {
+    width: 100%;
+    height: auto;
+    max-width: 80%;
+  }
+
+  .custom-caption {
+    margin-top: 0.5rem;
+    font-size: 0.95rem;
+  }
+
+  .publication-title {
+    word-break: break-word;
+  }
+
+  .publication-links {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.75rem;
+  }
+
+  .publication-links .link-block {
+    margin: 0;
+  }
+
+  @media screen and (max-width: 1024px) {
+    .hero-top-logos {
+      height: 95px;
+    }
+
+    .hero-top-logos .logo-left {
+      height: 95px;
+      max-width: 150px;
+    }
+
+    .hero-top-logos .logo-right {
+      height: 65px;
+      max-width: 250px;
+    }
+
+    .custom-teaser-img,
+    .custom-section-img {
+      max-width: 90%;
+    }
+  }
+
+  @media screen and (max-width: 768px) {
+    .hero-top-logos {
+      height: auto;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.25rem;
+    }
+
+    .hero-top-logos .logo-left,
+    .hero-top-logos .logo-right {
+      position: static;
+      transform: none;
+      max-width: 42%;
+      height: auto;
+    }
+
+    .hero-top-logos .logo-left {
+      max-height: 72px;
+    }
+
+    .hero-top-logos .logo-right {
+      max-height: 56px;
+    }
+
+    .publication-title {
+      font-size: 2.2rem !important;
+      line-height: 1.15;
+    }
+
+    .publication-authors {
+      font-size: 1.15rem !important;
+      line-height: 1.5;
+    }
+
+    .publication-links {
+      gap: 0.6rem;
+    }
+
+    .publication-links .button {
+      width: 100%;
+      justify-content: center;
+    }
+
+    .custom-teaser-img,
+    .custom-section-img {
+      max-width: 100%;
+    }
+
+    .custom-caption {
+      font-size: 0.9rem;
+    }
+
+    iframe {
+      min-height: 320px;
+    }
+  }
+
+  @media screen and (max-width: 480px) {
+    .publication-title {
+      font-size: 1.8rem !important;
+    }
+
+    .publication-authors {
+      font-size: 1rem !important;
+    }
+
+    .hero-top-logos .logo-left {
+      max-height: 60px;
+    }
+
+    .hero-top-logos .logo-right {
+      max-height: 48px;
+    }
+
+    iframe {
+      min-height: 260px;
+    }
+  }
+</style>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -124,18 +282,13 @@
             <div class="column has-text-centered">
 
               <!-- Logos -->
-              <div style="position: relative; width: 100%; height: 100px; margin-bottom: 1rem;">
-              
-                <!-- Logo gauche -->
+              <div class="hero-top-logos">
                 <img src="static/images/LOGO-ATT-NORMAL-2.png"
-                     alt="Logo 1"
-                     style="position: absolute; left: 0; top: 50%; transform: translateY(-50%); height: 120px;">
-              
-                <!-- Logo droite -->
+                     alt="Advanced Track and Trace logo"
+                     class="logo-left">
                 <img src="static/images/LOGOS_ENS-PARIS-SACLAY_UPSAY_2.png"
-                     alt="Logo 2"
-                     style="position: absolute; right: 0; top: 50%; transform: translateY(-50%); height: 80px;">
-              
+                     alt="ENS Paris-Saclay and Université Paris-Saclay logos"
+                     class="logo-right">
               </div>
               
               <h1 class="title is-1 publication-title">
@@ -224,7 +377,7 @@
     <section class="hero teaser">
       <div class="container is-max-desktop">
         <div class="hero-body">
-          <img src="static/images/teaser.png" alt="Teaser image for the paper" loading="lazy">
+          <img src="static/images/teaser.png" alt="Teaser image for the paper" loading="lazy" class="custom-teaser-img">
           <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
             We introduce autocorrelation-based fiducial textures for robust traceability, with local affinity estimation and texture rectification on planar and curved surfaces.
           </h2>
@@ -244,8 +397,8 @@
               <figure>
                 <img src="static/images/ExampleFiducialMarkers.png" 
                      alt="Classical fiducial markers"
-                     style="max-width: 80%; height: auto;">
-                <figcaption style="margin-top: 0.5rem; font-size: 0.9rem;">
+                     class="custom-section-img">
+                <figcaption class="custom-caption">
                   Classical fiducial markers
                 </figcaption>
               </figure>
@@ -269,10 +422,10 @@
       <!-- Image -->
       <div class="has-text-centered" style="margin-bottom: 1.5rem;">
         <figure>
-          <img src="static/images/depositphotos.jpg" 
-               alt="Traceability problem on wine bottles"
-               style="max-width: 80%; height: auto;">
-          <figcaption style="margin-top: 0.5rem; font-size: 0.9rem;">
+        <img src="static/images/depositphotos.jpg" 
+             alt="Traceability problem on wine bottles"
+             class="custom-section-img">
+        <figcaption class="custom-caption">
             Traditional visible identifiers can be degraded or removed, especially on high-value products such as wine bottles.
           </figcaption>
         </figure>

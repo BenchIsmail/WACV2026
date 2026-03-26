@@ -480,20 +480,45 @@
     </div>
   </section>
 
-    <!-- Method -->
-    <section class="section is-light">
-      <div class="container is-max-desktop">
-        <h2 class="title is-3 has-text-centered">Method Overview</h2>
-        <div class="content has-text-justified">
-          <p>
-            Our method starts from specially designed textures whose autocorrelation reveals a fundamental hexagonal arrangement of peaks. These peaks encode local geometric information and make it possible to estimate local affine distortions from image patches. We then combine these local estimates across the image to recover a global geometric model and rectify the observed texture.
-          </p>
-          <p>
-            This approach is particularly useful when explicit landmarks are unavailable or undesirable, and when the texture may be observed under strong deformation, including non-planar settings.
-          </p>
-        </div>
+  <!-- Method -->
+  <section class="section is-light">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3 has-text-centered">Method Overview</h2>
+  
+      <div class="content has-text-justified">
+        <p>
+          Our method starts from specially designed textures whose autocorrelation reveals a fundamental hexagonal arrangement of peaks. These peaks encode local geometric information and make it possible to estimate local affine distortions from image patches. We then combine these local estimates across the image to recover a global geometric model and rectify the observed texture.
+        </p>
+        <p>
+          This approach is particularly useful when explicit landmarks are unavailable or undesirable, and when the texture may be observed under strong deformation, including non-planar settings.
+        </p>
       </div>
-    </section>
+  
+      <!-- PDF with 3 pages -->
+      <div class="has-text-centered" style="margin-top: 2rem;">
+        <iframe
+          src="static/pdfs/acorr123.pdf"
+          width="100%"
+          height="1200"
+          title="Method Overview PDF"
+          loading="lazy"
+          style="border: none; border-radius: 12px; background: white;">
+        </iframe>
+      </div>
+  
+      <div class="has-text-centered" style="margin-top: 1rem;">
+        <a href="static/pdfs/acorr123.pdf"
+           target="_blank"
+           rel="noopener noreferrer"
+           class="button is-dark is-rounded">
+          <span class="icon">
+            <i class="fas fa-file-pdf"></i>
+          </span>
+          <span>Open Method PDF</span>
+        </a>
+      </div>
+    </div>
+  </section>
 
     <!-- Results -->
     <section class="hero is-small">

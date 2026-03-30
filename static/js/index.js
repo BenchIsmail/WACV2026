@@ -35,32 +35,25 @@
   const TEXTURE_SRC = "static/images/WACV2026_sk4_3x22.png";
   const LONG_PRESS_MS = 1000;
 
-  const bgCanvas = document.getElementById("texture-bg-canvas");
-  const workCanvas = document.getElementById("texture-work-canvas");
+  const sourceCanvas = document.getElementById("texture-source-canvas");
   const preview = document.getElementById("acorr-preview");
   const acorrCanvas = document.getElementById("acorr-canvas");
   const patchSizeLabel = document.getElementById("patch-size-label");
   const contrastInput = document.getElementById("acorr-contrast");
   const contrastValue = document.getElementById("acorr-contrast-value");
 
-  if (!bgCanvas || !workCanvas || !preview || !acorrCanvas || !patchSizeLabel) {
-    console.error("Missing required DOM elements for texture/autocorrelation.");
+  if (!sourceCanvas || !preview || !acorrCanvas || !patchSizeLabel) {
+    console.error("Missing required DOM elements.");
     return;
   }
 
-  const bgCtx = bgCanvas.getContext("2d", { alpha: false });
-  const workCtx = workCanvas.getContext("2d", { willReadFrequently: true });
+  const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
   const acorrCtx = acorrCanvas.getContext("2d");
 
   const textureImg = new Image();
 
-  let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   let viewW = window.innerWidth;
   let viewH = window.innerHeight;
-
-  let simScale = 0.5;
-  let simW = 0;
-  let simH = 0;
 
   let patchSize = 200;
   const patchMin = 80;
@@ -85,66 +78,41 @@
     return !!el.closest("a, button, iframe, input, textarea, select, video, .carousel, .slider, .publication-links");
   }
 
-  function resizeAll() {
+  function resizeSourceCanvas() {
     viewW = window.innerWidth;
     viewH = window.innerHeight;
-    dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
 
-    bgCanvas.width = Math.floor(viewW * dpr);
-    bgCanvas.height = Math.floor(viewH * dpr);
-    bgCanvas.style.width = `${viewW}px`;
-    bgCanvas.style.height = `${viewH}px`;
-    bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sourceCanvas.width = viewW;
+    sourceCanvas.height = viewH;
 
-    simW = Math.max(320, Math.floor(viewW * simScale));
-    simH = Math.max(320, Math.floor(viewH * simScale));
-
-    workCanvas.width = simW;
-    workCanvas.height = simH;
-
-    drawFixedTexture();
+    drawHiddenTexture();
   }
 
-  function pageToSim(x, y) {
-    return {
-      x: (x / viewW) * simW,
-      y: (y / viewH) * simH
-    };
-  }
-
-  function drawFixedTexture() {
+  function drawHiddenTexture() {
     if (!textureImg.complete || !textureImg.naturalWidth) return;
 
-    workCtx.clearRect(0, 0, simW, simH);
+    sourceCtx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
 
-    const pattern = workCtx.createPattern(textureImg, "repeat");
+    const pattern = sourceCtx.createPattern(textureImg, "repeat");
     if (!pattern) return;
 
-    workCtx.fillStyle = pattern;
-    workCtx.fillRect(0, 0, simW, simH);
-
-    bgCtx.clearRect(0, 0, viewW, viewH);
-    bgCtx.imageSmoothingEnabled = true;
-    bgCtx.drawImage(workCanvas, 0, 0, viewW, viewH);
+    sourceCtx.fillStyle = pattern;
+    sourceCtx.fillRect(0, 0, sourceCanvas.width, sourceCanvas.height);
   }
 
-  function getPatchFromRenderedView(pageX, pageY) {
-    const p = pageToSim(pageX, pageY);
-    const half = Math.floor((patchSize * simScale) / 2);
+  function getPatchFromHiddenTexture(pageX, pageY) {
+    const half = Math.floor(patchSize / 2);
 
     const patchCanvas = document.createElement("canvas");
     patchCanvas.width = patchSize;
     patchCanvas.height = patchSize;
 
     const pctx = patchCanvas.getContext("2d", { willReadFrequently: true });
-
-    const sx = Math.round(p.x - half);
-    const sy = Math.round(p.y - half);
-    const sw = Math.max(1, Math.round(patchSize * simScale));
-    const sh = Math.max(1, Math.round(patchSize * simScale));
+    const sx = Math.round(pageX - half);
+    const sy = Math.round(pageY - half);
 
     pctx.imageSmoothingEnabled = true;
-    pctx.drawImage(workCanvas, sx, sy, sw, sh, 0, 0, patchSize, patchSize);
+    pctx.drawImage(sourceCanvas, sx, sy, patchSize, patchSize, 0, 0, patchSize, patchSize);
 
     return patchCanvas;
   }
@@ -183,6 +151,7 @@
         out[y][x] = 0.299 * r + 0.587 * g + 0.114 * b;
       }
     }
+
     return out;
   }
 
@@ -220,6 +189,7 @@
         e += v * v;
       }
     }
+
     return e;
   }
 
@@ -300,6 +270,7 @@
     const h = mat.length;
     const w = mat[0].length;
     const denom = energy !== 0 ? energy : 1;
+
     const out = Array.from({ length: h }, () => new Float64Array(w));
 
     for (let y = 0; y < h; y++) {
@@ -320,7 +291,6 @@
     tmp.width = w;
     tmp.height = h;
     const tctx = tmp.getContext("2d");
-
     const img = tctx.createImageData(w, h);
 
     let minV = Infinity;
@@ -360,7 +330,7 @@
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
 
-    ctx.strokeStyle = "rgba(255,0,0,0.85)";
+    ctx.strokeStyle = "rgba(255, 0, 0, 0.85)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(canvas.width / 2, 0);
@@ -379,11 +349,12 @@
     const P = powerSpectrum(F);
     const ac = idft2DComplex(P);
     const acShift = fftshift2D(ac);
+
     return normalizeAutocorr(acShift, energy);
   }
 
   async function updateAutocorrelationPreview(pageX, pageY) {
-    const patchCanvas = getPatchFromRenderedView(pageX, pageY);
+    const patchCanvas = getPatchFromHiddenTexture(pageX, pageY);
     const contrast = contrastInput ? parseFloat(contrastInput.value) : 1.5;
 
     try {
@@ -398,20 +369,21 @@
 
   function rerenderLastAutocorr() {
     if (!lastAutocorrMatrix) return;
+
     const contrast = contrastInput ? parseFloat(contrastInput.value) : 1.5;
     renderAutocorrToCanvas(lastAutocorrMatrix, acorrCanvas, contrast);
   }
 
   function placePreview(pageX, pageY) {
     const pad = 18;
+    const boxW = 280;
+    const boxH = 330;
+
     let x = pageX + 16;
     let y = pageY + 12;
 
-    const w = 270;
-    const h = 320;
-
-    if (x + w > window.innerWidth - pad) x = pageX - w - 18;
-    if (y + h > window.innerHeight - pad) y = window.innerHeight - h - pad;
+    if (x + boxW > window.innerWidth - pad) x = pageX - boxW - 16;
+    if (y + boxH > window.innerHeight - pad) y = window.innerHeight - boxH - pad;
     if (x < pad) x = pad;
     if (y < pad) y = pad;
 
@@ -467,6 +439,7 @@
       if (state.showPreview) {
         hidePreview();
       }
+
       state.showPreview = false;
     }
   }
@@ -490,32 +463,29 @@
     e.preventDefault();
   }
 
-  function initTexture() {
-    resizeAll();
+  function initAutocorrelationSystem() {
+    resizeSourceCanvas();
 
     if (contrastInput && contrastValue) {
       contrastValue.textContent = `${parseFloat(contrastInput.value).toFixed(1)}×`;
+
       contrastInput.addEventListener("input", function () {
         contrastValue.textContent = `${parseFloat(contrastInput.value).toFixed(1)}×`;
         rerenderLastAutocorr();
       });
     }
 
-    window.addEventListener("resize", resizeAll);
+    window.addEventListener("resize", resizeSourceCanvas);
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("pointermove", onPointerMove, true);
     document.addEventListener("pointerup", onPointerUp, true);
     document.addEventListener("pointercancel", onPointerUp, true);
     document.addEventListener("wheel", onWheel, { passive: false, capture: true });
     document.addEventListener("contextmenu", onContextMenu, true);
-
-    drawFixedTexture();
-    console.log("Texture background initialized.");
   }
 
   textureImg.onload = function () {
-    console.log("Texture loaded:", TEXTURE_SRC);
-    initTexture();
+    initAutocorrelationSystem();
   };
 
   textureImg.onerror = function () {

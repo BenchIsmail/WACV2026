@@ -36,10 +36,11 @@
   });
 
   /* -----------------------------
-     Interactive textured background
+     Fixed textured background
+     + long right click autocorrelation preview
   ----------------------------- */
 
-  const TEXTURE_SRC = "static/images/binary_for_cycl.png";
+  const TEXTURE_SRC = "static/images/WACV2026_sk4_3x22.png";
   const LONG_PRESS_MS = 1000;
 
   const bgCanvas = document.getElementById("texture-bg-canvas");
@@ -79,35 +80,13 @@
   const state = {
     mouseX: 0,
     mouseY: 0,
-    leftDown: false,
     rightDown: false,
-    dragging: false,
     showPreview: false,
-    lastLeftX: 0,
-    lastLeftY: 0,
-    pressTimerLeft: null,
     pressTimerRight: null
-  };
-
-  const field = {
-    cols: 0,
-    rows: 0,
-    cell: 24,
-    dx: [],
-    dy: []
   };
 
   function clamp(v, a, b) {
     return Math.max(a, Math.min(b, v));
-  }
-
-  function smoothstep01(t) {
-    t = clamp(t, 0, 1);
-    return t * t * (3 - 2 * t);
-  }
-
-  function idx(ix, iy) {
-    return iy * field.cols + ix;
   }
 
   function isInteractiveElement(el) {
@@ -131,10 +110,7 @@
     workCanvas.width = simW;
     workCanvas.height = simH;
 
-    field.cols = Math.ceil(simW / field.cell) + 2;
-    field.rows = Math.ceil(simH / field.cell) + 2;
-    field.dx = new Float32Array(field.cols * field.rows);
-    field.dy = new Float32Array(field.cols * field.rows);
+    drawFixedTexture();
   }
 
   function pageToSim(x, y) {
@@ -144,120 +120,15 @@
     };
   }
 
-  function addForce(pageX, pageY, vx, vy) {
-    const p = pageToSim(pageX, pageY);
-    const radius = Math.max(30, patchSize * 0.25 * simScale);
-
-    for (let iy = 0; iy < field.rows; iy++) {
-      for (let ix = 0; ix < field.cols; ix++) {
-        const cx = ix * field.cell;
-        const cy = iy * field.cell;
-        const dx = cx - p.x;
-        const dy = cy - p.y;
-        const dist = Math.hypot(dx, dy);
-
-        if (dist > radius) continue;
-
-        const t = 1 - dist / radius;
-        const w = smoothstep01(t);
-        const k = idx(ix, iy);
-
-        field.dx[k] += vx * 0.7 * w;
-        field.dy[k] += vy * 0.7 * w;
-      }
-    }
-  }
-
-  function relaxField() {
-    const nextDx = new Float32Array(field.dx.length);
-    const nextDy = new Float32Array(field.dy.length);
-
-    for (let iy = 0; iy < field.rows; iy++) {
-      for (let ix = 0; ix < field.cols; ix++) {
-        const k = idx(ix, iy);
-
-        let sumX = 0;
-        let sumY = 0;
-        let n = 0;
-
-        for (let oy = -1; oy <= 1; oy++) {
-          for (let ox = -1; ox <= 1; ox++) {
-            const jx = ix + ox;
-            const jy = iy + oy;
-            if (jx < 0 || jx >= field.cols || jy < 0 || jy >= field.rows) continue;
-            const kk = idx(jx, jy);
-            sumX += field.dx[kk];
-            sumY += field.dy[kk];
-            n++;
-          }
-        }
-
-        const avgX = sumX / Math.max(1, n);
-        const avgY = sumY / Math.max(1, n);
-
-        nextDx[k] = (field.dx[k] * 0.82 + avgX * 0.18) * 0.94;
-        nextDy[k] = (field.dy[k] * 0.82 + avgY * 0.18) * 0.94;
-      }
-    }
-
-    field.dx = nextDx;
-    field.dy = nextDy;
-  }
-
-  function sampleField(x, y) {
-    const gx = x / field.cell;
-    const gy = y / field.cell;
-
-    const x0 = Math.floor(gx);
-    const y0 = Math.floor(gy);
-    const x1 = clamp(x0 + 1, 0, field.cols - 1);
-    const y1 = clamp(y0 + 1, 0, field.rows - 1);
-
-    const tx = gx - x0;
-    const ty = gy - y0;
-
-    const k00 = idx(clamp(x0, 0, field.cols - 1), clamp(y0, 0, field.rows - 1));
-    const k10 = idx(x1, clamp(y0, 0, field.rows - 1));
-    const k01 = idx(clamp(x0, 0, field.cols - 1), y1);
-    const k11 = idx(x1, y1);
-
-    const dx0 = field.dx[k00] * (1 - tx) + field.dx[k10] * tx;
-    const dx1 = field.dx[k01] * (1 - tx) + field.dx[k11] * tx;
-    const dy0 = field.dy[k00] * (1 - tx) + field.dy[k10] * tx;
-    const dy1 = field.dy[k01] * (1 - tx) + field.dy[k11] * tx;
-
-    return {
-      dx: dx0 * (1 - ty) + dx1 * ty,
-      dy: dy0 * (1 - ty) + dy1 * ty
-    };
-  }
-
-  function drawWarpedTexture() {
+  function drawFixedTexture() {
     if (!textureImg.complete || !textureImg.naturalWidth) return;
 
     workCtx.clearRect(0, 0, simW, simH);
 
-    const tileW = textureImg.width;
-    const tileH = textureImg.height;
-    const step = 12;
-
-    for (let y = 0; y < simH; y += step) {
-      for (let x = 0; x < simW; x += step) {
-        const s = sampleField(x, y);
-
-        const sx = ((x - s.dx) % tileW + tileW) % tileW;
-        const sy = ((y - s.dy) % tileH + tileH) % tileH;
-
-        workCtx.drawImage(
-          textureImg,
-          sx, sy, Math.min(step, tileW - sx), Math.min(step, tileH - sy),
-          x, y, step, step
-        );
-
-        if (sx + step > tileW || sy + step > tileH) {
-          workCtx.drawImage(textureImg, 0, 0, step, step, x, y, step, step);
-        }
-      }
+    const pattern = workCtx.createPattern(textureImg, "repeat");
+    if (pattern) {
+      workCtx.fillStyle = pattern;
+      workCtx.fillRect(0, 0, simW, simH);
     }
 
     bgCtx.clearRect(0, 0, viewW, viewH);
@@ -575,20 +446,6 @@
 
     if (isInteractiveElement(e.target)) return;
 
-    if (e.button === 0) {
-      state.leftDown = true;
-      state.lastLeftX = e.clientX;
-      state.lastLeftY = e.clientY;
-
-      clearTimeout(state.pressTimerLeft);
-      state.pressTimerLeft = setTimeout(() => {
-        if (state.leftDown) {
-          state.dragging = true;
-          document.body.classList.add("texture-dragging");
-        }
-      }, LONG_PRESS_MS);
-    }
-
     if (e.button === 2) {
       state.rightDown = true;
 
@@ -610,26 +467,9 @@
       placePreview(e.clientX, e.clientY);
       updateAutocorrelationPreview(e.clientX, e.clientY);
     }
-
-    if (state.dragging && state.leftDown) {
-      const dx = e.clientX - state.lastLeftX;
-      const dy = e.clientY - state.lastLeftY;
-
-      addForce(e.clientX, e.clientY, dx * simScale, dy * simScale);
-
-      state.lastLeftX = e.clientX;
-      state.lastLeftY = e.clientY;
-    }
   }
 
   function onPointerUp(e) {
-    if (e.button === 0) {
-      state.leftDown = false;
-      clearTimeout(state.pressTimerLeft);
-      state.dragging = false;
-      document.body.classList.remove("texture-dragging");
-    }
-
     if (e.button === 2) {
       state.rightDown = false;
       clearTimeout(state.pressTimerRight);
@@ -659,13 +499,6 @@
     }
   }
 
-  function animate() {
-    relaxField();
-    drawWarpedTexture();
-
-    requestAnimationFrame(animate);
-  }
-
   function initTexture() {
     resizeAll();
 
@@ -686,7 +519,7 @@
     document.addEventListener("wheel", onWheel, { passive: false, capture: true });
     document.addEventListener("contextmenu", onContextMenu, true);
 
-    animate();
+    drawFixedTexture();
   }
 
   textureImg.onload = initTexture;

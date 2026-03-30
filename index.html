@@ -74,19 +74,19 @@
     html, body {
       min-height: 100%;
     }
+  body {
+    position: relative;
+    background: transparent;
+    overflow-x: hidden;
+  }
 
-    body {
-      position: relative;
-      background: #0f172a;
-      overflow-x: hidden;
-    }
-
-    #texture-bg-root {
-      position: fixed;
-      inset: 0;
-      z-index: -10;
-      overflow: hidden;
-    }
+  #texture-bg-root {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+  }
 
     #texture-bg-canvas {
       position: absolute;
@@ -95,10 +95,12 @@
       height: 100%;
       display: block;
     }
-
+    
     .hero,
     .section,
-    .footer {
+    .footer,
+    main,
+    .scroll-to-top {
       position: relative;
       z-index: 1;
     }

@@ -39,7 +39,7 @@
      Interactive textured background
   ----------------------------- */
 
-  const TEXTURE_SRC = "static/images/WACV2026_sk4_3x22.png";
+  const TEXTURE_SRC = "static/images/binary_for_cycl.png";
   const LONG_PRESS_MS = 1000;
 
   const bgCanvas = document.getElementById("texture-bg-canvas");

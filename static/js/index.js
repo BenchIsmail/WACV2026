@@ -1,9 +1,6 @@
 (function () {
   "use strict";
 
-  /* -----------------------------
-     Existing helper functions
-  ----------------------------- */
   window.scrollToTop = function () {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -35,11 +32,6 @@
     }
   });
 
-  /* -----------------------------
-     Fixed textured background
-     + long right click autocorrelation preview
-  ----------------------------- */
-
   const TEXTURE_SRC = "static/images/WACV2026_sk4_3x22.png";
   const LONG_PRESS_MS = 1000;
 
@@ -52,6 +44,7 @@
   const contrastValue = document.getElementById("acorr-contrast-value");
 
   if (!bgCanvas || !workCanvas || !preview || !acorrCanvas || !patchSizeLabel) {
+    console.error("Missing required DOM elements for texture/autocorrelation.");
     return;
   }
 
@@ -60,7 +53,6 @@
   const acorrCtx = acorrCanvas.getContext("2d");
 
   const textureImg = new Image();
-  textureImg.crossOrigin = "anonymous";
 
   let dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
   let viewW = window.innerWidth;
@@ -126,10 +118,10 @@
     workCtx.clearRect(0, 0, simW, simH);
 
     const pattern = workCtx.createPattern(textureImg, "repeat");
-    if (pattern) {
-      workCtx.fillStyle = pattern;
-      workCtx.fillRect(0, 0, simW, simH);
-    }
+    if (!pattern) return;
+
+    workCtx.fillStyle = pattern;
+    workCtx.fillRect(0, 0, simW, simH);
 
     bgCtx.clearRect(0, 0, viewW, viewH);
     bgCtx.imageSmoothingEnabled = true;
@@ -197,8 +189,8 @@
   function removeMean(mat) {
     const h = mat.length;
     const w = mat[0].length;
-
     let sum = 0;
+
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
         sum += mat[y][x];
@@ -213,6 +205,7 @@
         out[y][x] = mat[y][x] - mean;
       }
     }
+
     return out;
   }
 
@@ -307,7 +300,6 @@
     const h = mat.length;
     const w = mat[0].length;
     const denom = energy !== 0 ? energy : 1;
-
     const out = Array.from({ length: h }, () => new Float64Array(w));
 
     for (let y = 0; y < h; y++) {
@@ -387,9 +379,7 @@
     const P = powerSpectrum(F);
     const ac = idft2DComplex(P);
     const acShift = fftshift2D(ac);
-    const acNorm = normalizeAutocorr(acShift, energy);
-
-    return acNorm;
+    return normalizeAutocorr(acShift, energy);
   }
 
   async function updateAutocorrelationPreview(pageX, pageY) {
@@ -473,8 +463,11 @@
     if (e.button === 2) {
       state.rightDown = false;
       clearTimeout(state.pressTimerRight);
+
+      if (state.showPreview) {
+        hidePreview();
+      }
       state.showPreview = false;
-      hidePreview();
     }
   }
 
@@ -494,9 +487,7 @@
   }
 
   function onContextMenu(e) {
-    if (state.showPreview || state.rightDown) {
-      e.preventDefault();
-    }
+    e.preventDefault();
   }
 
   function initTexture() {
@@ -504,7 +495,6 @@
 
     if (contrastInput && contrastValue) {
       contrastValue.textContent = `${parseFloat(contrastInput.value).toFixed(1)}×`;
-
       contrastInput.addEventListener("input", function () {
         contrastValue.textContent = `${parseFloat(contrastInput.value).toFixed(1)}×`;
         rerenderLastAutocorr();
@@ -520,11 +510,17 @@
     document.addEventListener("contextmenu", onContextMenu, true);
 
     drawFixedTexture();
+    console.log("Texture background initialized.");
   }
 
-  textureImg.onload = initTexture;
+  textureImg.onload = function () {
+    console.log("Texture loaded:", TEXTURE_SRC);
+    initTexture();
+  };
+
   textureImg.onerror = function () {
     console.error("Impossible to load texture image:", TEXTURE_SRC);
   };
+
   textureImg.src = TEXTURE_SRC;
 })();

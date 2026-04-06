@@ -90,7 +90,7 @@
     // UTILS
     // =========================================================
     function updateContrast(delta) {
-      state.contrast = clamp(state.contrast + delta, 0.2, 5);
+      state.contrast = clamp(state.contrast + delta, 0.2, 20);
       state.contrast = Math.round(state.contrast * 10) / 10;
     
       contrastSlider.value = state.contrast;

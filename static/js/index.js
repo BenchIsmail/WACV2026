@@ -241,7 +241,7 @@
             base[rollIndex(x, y, shift2.x, shift2.y)];
         }
       }
-      return out;
+      return out*255;
     }
 
     function genRandomBinaryTexture(w, h, dilationSize, density, angleShiftDeg, normShift) {

@@ -49,10 +49,8 @@
 
   <title>Autocorrelation-based Fiducial Markers for Traceability | WACV 2026</title>
 
-  <link rel="icon" href="./static/images/favicon.ico?v=2" sizes="any">
-  <link rel="shortcut icon" href="./static/images/favicon.ico?v=2">
-  <link rel="apple-touch-icon" href="./static/images/apple-touch-icon.png?v=2">
-
+  <link rel="icon" type="image/x-icon" href="/WACV2026/favicon.ico?v=3">
+  <link rel="shortcut icon" type="image/x-icon" href="/WACV2026/favicon.ico?v=3">
 
   <link rel="stylesheet" href="static/css/bulma.min.css">
   <link rel="stylesheet" href="static/css/index.css">
@@ -80,6 +78,7 @@
       position: relative;
       background: #f8fafc;
       overflow-x: hidden;
+      font-family: 'Inter', sans-serif;
     }
 
     .hero,
@@ -91,31 +90,15 @@
       z-index: 1;
     }
 
-    #texture-source-root {
-      position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      visibility: hidden;
-      pointer-events: none;
-      z-index: -1;
-    }
-
-    #texture-source-canvas {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-
     #acorr-preview {
       position: fixed;
       display: none;
-      min-width: 260px;
-      max-width: 280px;
-      background: rgba(15, 23, 42, 0.96);
+      min-width: 280px;
+      max-width: 300px;
+      background: rgba(15, 23, 42, 0.97);
       color: white;
       border-radius: 14px;
-      padding: 0.8rem;
+      padding: 0.85rem;
       box-shadow: 0 14px 36px rgba(0, 0, 0, 0.28);
       border: 1px solid rgba(255, 255, 255, 0.12);
       z-index: 99999;
@@ -138,8 +121,8 @@
     }
 
     #acorr-canvas {
-      width: 220px;
-      height: 220px;
+      width: 240px;
+      height: 240px;
       border-radius: 10px;
       background: black;
       display: block;
@@ -244,6 +227,85 @@
       margin: 0.35rem;
     }
 
+    .interactive-box {
+      background: white;
+      border-radius: 18px;
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      padding: 1.4rem;
+      border: 1px solid rgba(15, 23, 42, 0.08);
+    }
+
+    .interactive-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+      justify-content: center;
+      margin-bottom: 1rem;
+    }
+
+    .interactive-status {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-top: 1rem;
+      color: #334155;
+      font-size: 0.95rem;
+    }
+
+    .status-pill {
+      background: #eff6ff;
+      color: #1e3a8a;
+      border-radius: 999px;
+      padding: 0.4rem 0.8rem;
+      font-weight: 600;
+    }
+
+    .interactive-canvas-wrap {
+      display: flex;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+
+    #interactive-canvas {
+      width: min(100%, 900px);
+      aspect-ratio: 1 / 1;
+      border-radius: 14px;
+      background: white;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+      cursor: crosshair;
+    }
+
+    .interactive-help {
+      margin-top: 1rem;
+      color: #475569;
+      font-size: 0.95rem;
+      text-align: center;
+    }
+
+    .bibtex-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .copy-bibtex-btn {
+      border: none;
+      background: #111827;
+      color: white;
+      border-radius: 999px;
+      padding: 0.65rem 1rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .copy-bibtex-btn:hover {
+      background: #1f2937;
+    }
+
     @media screen and (max-width: 1024px) {
       .hero-top-logos {
         height: 95px;
@@ -331,6 +393,11 @@
       .poster-mobile-preview {
         display: block;
       }
+
+      #acorr-canvas {
+        width: 220px;
+        height: 220px;
+      }
     }
 
     @media screen and (max-width: 480px) {
@@ -395,18 +462,14 @@
 </head>
 
 <body>
-  <div id="texture-source-root" aria-hidden="true">
-    <canvas id="texture-source-canvas"></canvas>
-  </div>
-
   <div id="acorr-preview">
     <div class="acorr-preview-inner">
       <div class="acorr-preview-header">
         <span>Autocorrelation</span>
-        <span id="patch-size-label">Patch: 200 px</span>
+        <span id="patch-size-label">Patch: 128 px</span>
       </div>
 
-      <canvas id="acorr-canvas" width="220" height="220"></canvas>
+      <canvas id="acorr-canvas" width="240" height="240"></canvas>
 
       <div class="acorr-controls">
         <label for="acorr-contrast">Contrast</label>
@@ -474,7 +537,6 @@
               </div>
 
               <div class="publication-links" style="margin-top: 1.5rem;">
-
                 <span class="link-block">
                   <a href="static/pdfs/WACV___Self_Rectifying_Textures-13.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
                     <span class="icon"><i class="fas fa-file-pdf"></i></span>
@@ -502,7 +564,6 @@
                     <span>Code</span>
                   </a>
                 </span>
-
               </div>
 
             </div>
@@ -518,6 +579,49 @@
           <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
             We introduce autocorrelation-based fiducial textures for robust traceability, with local affinity estimation and texture rectification on planar and curved surfaces.
           </h2>
+        </div>
+      </div>
+    </section>
+
+    <!-- INTERACTIVE TEST ZONE -->
+    <section class="section">
+      <div class="container is-max-desktop">
+        <h2 class="title is-3 has-text-centered">Interactive Test Zone</h2>
+
+        <div class="interactive-box">
+          <div class="interactive-toolbar">
+            <button id="btn-generate-texture" class="button is-dark is-rounded">
+              <span class="icon"><i class="fas fa-wand-magic-sparkles"></i></span>
+              <span>Texture Generate</span>
+            </button>
+
+            <button id="btn-change-projection" class="button is-link is-rounded">
+              <span class="icon"><i class="fas fa-arrows-rotate"></i></span>
+              <span>Change Projection</span>
+            </button>
+
+            <button id="btn-toggle-autocorr" class="button is-warning is-rounded">
+              <span class="icon"><i class="fas fa-magnifying-glass"></i></span>
+              <span>Autocorrelation</span>
+            </button>
+          </div>
+
+          <div class="interactive-canvas-wrap">
+            <canvas id="interactive-canvas" width="900" height="900"></canvas>
+          </div>
+
+          <div class="interactive-status">
+            <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
+            <span class="status-pill">Patch: <span id="patch-size-inline">128</span> px</span>
+            <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
+          </div>
+
+          <p class="interactive-help">
+            Click <strong>Texture Generate</strong> to create a new texture. Click <strong>Change Projection</strong> to cycle through
+            <strong>Affine</strong>, <strong>Perspective</strong>, and <strong>Cylindrical</strong>.
+            Click <strong>Autocorrelation</strong> to enable live local autocorrelation under the mouse.
+            Use the <strong>mouse wheel</strong> over the image to change the patch size.
+          </p>
         </div>
       </div>
     </section>
@@ -756,7 +860,9 @@
         <div class="content has-text-centered">
           <p>
             For questions regarding this work, please contact
-            <a href="mailto:i.bencheikh@att-fr.com">i.bencheikh@att-fr.com</a>.
+            <a href="mailto:i.bencheikh@att-fr.com">Ismail Bencheikh</a>
+            and
+            <a href="mailto:m.dunitz@att-fr.com">Max Dunitz</a>.
           </p>
         </div>
       </div>

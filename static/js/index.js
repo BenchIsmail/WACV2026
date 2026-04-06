@@ -62,7 +62,7 @@
     const contrastValue = document.getElementById("acorr-contrast-value");
 
     const state = {
-      size: 900,
+      size: 400,
       sourceCanvas: document.createElement("canvas"),
       sourceCtx: null,
       displayedCanvas: document.createElement("canvas"),
@@ -70,7 +70,7 @@
       sourceImageData: null,
       displayedImageData: null,
       patchSize: 128,
-      contrast: 1.5,
+      contrast: 0.5,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
@@ -327,7 +327,7 @@
       octx.save();
       octx.translate(outCanvas.width / 2, outCanvas.height / 2);
       octx.rotate(-18 * Math.PI / 180);
-      octx.transform(1.12, -0.18, 0.38, 0.95, 0, 0);
+      octx.transform(0.9, -0.18, 0.38, 0.95, 0, 0);
       octx.drawImage(tmpCanvas, -outCanvas.width / 2, -outCanvas.height / 2);
       octx.restore();
 

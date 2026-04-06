@@ -62,7 +62,7 @@
     const contrastValue = document.getElementById("acorr-contrast-value");
 
     const state = {
-      size: 400,
+      size: 600,
       sourceCanvas: document.createElement("canvas"),
       sourceCtx: null,
       displayedCanvas: document.createElement("canvas"),
@@ -70,7 +70,7 @@
       sourceImageData: null,
       displayedImageData: null,
       patchSize: 128,
-      contrast: 0.5,
+      contrast: 3,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
@@ -290,8 +290,8 @@
       const gray = genRandomBinaryTexture(
         w,
         h,
-        0.5,      // dilation size
-        0.011,   // proportion de noir
+        1,      // dilation size
+        0.02,   // proportion de noir
         90,     // angle shift
         22      // norm shift
       );

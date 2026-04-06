@@ -290,10 +290,10 @@
       const gray = genRandomBinaryTexture(
         w,
         h,
-        1,      // dilation size
-        0.16,   // proportion de noir
-        60,     // angle shift
-        58      // norm shift
+        0.5,      // dilation size
+        0.011,   // proportion de noir
+        90,     // angle shift
+        22      // norm shift
       );
     
       const img = createImageDataFromGray(gray, w, h);

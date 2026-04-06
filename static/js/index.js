@@ -627,6 +627,27 @@
     canvas.addEventListener("mouseleave", () => {
       acorrPreview.style.display = "none";
     });
+    let canvasHovered = false;
+    
+    canvas.addEventListener("mouseenter", () => {
+      canvasHovered = true;
+    });
+    
+    canvas.addEventListener("mouseleave", () => {
+      canvasHovered = false;
+    });
+    
+    window.addEventListener("keydown", (event) => {
+      if (!state.autocorrEnabled || !canvasHovered) return;
+    
+      if (event.key === "ArrowRight") {
+        event.preventDefault();
+        updateContrast(0.1);
+      } else if (event.key === "ArrowLeft") {
+        event.preventDefault();
+        updateContrast(-0.1);
+      }
+    });
 
     canvas.addEventListener("wheel", (event) => {
       if (!state.autocorrEnabled) return;

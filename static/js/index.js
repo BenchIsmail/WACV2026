@@ -570,10 +570,10 @@
     window.addEventListener("keydown", (event) => {
       if (!state.autocorrEnabled) return;
     
-      if (event.key === "ArrowUp") {
+      if (event.key === "ArrowRight") {
         event.preventDefault();
         updateContrast(0.1);
-      } else if (event.key === "ArrowDown") {
+      } else if (event.key === "ArrowLeft") {
         event.preventDefault();
         updateContrast(-0.1);
       }

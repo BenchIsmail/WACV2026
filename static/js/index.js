@@ -100,6 +100,22 @@
       return Math.max(a, Math.min(b, v));
     }
 
+    function arrayMin(arr) {
+      let m = Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] < m) m = arr[i];
+      }
+      return m;
+    }
+
+    function arrayMax(arr) {
+      let m = -Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        if (arr[i] > m) m = arr[i];
+      }
+      return m;
+    }
+
     function normalizeToUint8(arr) {
       let min = Infinity;
       let max = -Infinity;
@@ -117,6 +133,56 @@
       const scale = 255 / (max - min);
       for (let i = 0; i < arr.length; i++) {
         out[i] = clamp(Math.round((arr[i] - min) * scale), 0, 255);
+      }
+
+      return out;
+    }
+
+    function thresholdAndNormalize(arr, ratio) {
+      const out = new Uint8ClampedArray(arr.length);
+
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
+      }
+
+      if (!(maxVal > minVal)) {
+        return out;
+      }
+
+      const threshold = minVal + ratio * (maxVal - minVal);
+
+      let keptMin = Infinity;
+      let keptMax = -Infinity;
+
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v >= threshold) {
+          if (v < keptMin) keptMin = v;
+          if (v > keptMax) keptMax = v;
+        }
+      }
+
+      if (!(keptMax > keptMin)) {
+        for (let i = 0; i < arr.length; i++) {
+          out[i] = arr[i] >= threshold ? 255 : 0;
+        }
+        return out;
+      }
+
+      const scale = 255 / (keptMax - keptMin);
+
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < threshold) {
+          out[i] = 0;
+        } else {
+          out[i] = clamp(Math.round((v - keptMin) * scale), 0, 255);
+        }
       }
 
       return out;
@@ -189,7 +255,7 @@
       return img;
     }
 
-    function drawCross(targetCtx, x, y, color = "#ff0000", size = 4, lineWidth = 1) {
+    function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
       targetCtx.save();
       targetCtx.strokeStyle = color;
       targetCtx.lineWidth = lineWidth;
@@ -200,14 +266,6 @@
       targetCtx.lineTo(x, y + size);
       targetCtx.stroke();
       targetCtx.restore();
-    }
-
-    function arrayMax(arr) {
-      let m = -Infinity;
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i] > m) m = arr[i];
-      }
-      return m;
     }
 
     function computeLaplacian2D(arr, w, h) {
@@ -221,88 +279,6 @@
           const up = arr[clamp(y - 1, 0, h - 1) * w + x];
           const down = arr[clamp(y + 1, 0, h - 1) * w + x];
           out[y * w + x] = left + right + up + down - 4 * c;
-        }
-      }
-
-      return out;
-    }
-
-    function computePeakMask(arr, w, h, threshold) {
-      const mask = new Uint8ClampedArray(w * h);
-
-      for (let y = 1; y < h - 1; y++) {
-        for (let x = 1; x < w - 1; x++) {
-          const v = arr[y * w + x];
-          if (v < threshold) continue;
-
-          let isLocalMax = true;
-
-          for (let dy = -1; dy <= 1 && isLocalMax; dy++) {
-            for (let dx = -1; dx <= 1; dx++) {
-              if (dx === 0 && dy === 0) continue;
-              const n = arr[(y + dy) * w + (x + dx)];
-              if (n > v) {
-                isLocalMax = false;
-                break;
-              }
-            }
-          }
-
-          if (isLocalMax) mask[y * w + x] = 255;
-        }
-      }
-
-      return mask;
-    }
-
-    function dilateBinaryMask(mask, w, h, radius = 1) {
-      const out = new Uint8ClampedArray(w * h);
-
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          let on = false;
-
-          for (let dy = -radius; dy <= radius && !on; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-              const xx = x + dx;
-              const yy = y + dy;
-
-              if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-              if (mask[yy * w + xx] > 0) {
-                on = true;
-                break;
-              }
-            }
-          }
-
-          out[y * w + x] = on ? 255 : 0;
-        }
-      }
-
-      return out;
-    }
-
-    function applyBinaryDilation(gray, w, h, radius) {
-      const out = new Uint8ClampedArray(w * h);
-
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          let makeBlack = false;
-
-          for (let dy = -radius; dy <= radius && !makeBlack; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-              const xx = x + dx;
-              const yy = y + dy;
-
-              if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-              if (gray[yy * w + xx] === 0) {
-                makeBlack = true;
-                break;
-              }
-            }
-          }
-
-          out[y * w + x] = makeBlack ? 0 : 255;
         }
       }
 
@@ -377,6 +353,33 @@
       }
 
       return applyBinaryDilation(binary, w, h, dilationSize);
+    }
+
+    function applyBinaryDilation(gray, w, h, radius) {
+      const out = new Uint8ClampedArray(w * h);
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let makeBlack = false;
+
+          for (let dy = -radius; dy <= radius && !makeBlack; dy++) {
+            for (let dx = -radius; dx <= radius; dx++) {
+              const xx = x + dx;
+              const yy = y + dy;
+
+              if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
+              if (gray[yy * w + xx] === 0) {
+                makeBlack = true;
+                break;
+              }
+            }
+          }
+
+          out[y * w + x] = makeBlack ? 0 : 255;
+        }
+      }
+
+      return out;
     }
 
     function renderGeneratedTexture() {
@@ -552,6 +555,17 @@
       const out = new Float64Array(n * n);
       const center = Math.floor(n / 2);
 
+      let mean = 0;
+      for (let i = 0; i < grayPatch.length; i++) {
+        mean += grayPatch[i];
+      }
+      mean /= grayPatch.length;
+
+      const centered = new Float64Array(grayPatch.length);
+      for (let i = 0; i < grayPatch.length; i++) {
+        centered[i] = grayPatch[i] - mean;
+      }
+
       for (let dy = -center; dy <= center; dy++) {
         for (let dx = -center; dx <= center; dx++) {
           let sum = 0.0;
@@ -565,8 +579,8 @@
               const xx = x + dx;
               if (xx < 0 || xx >= n) continue;
 
-              const a = grayPatch[y * n + x];
-              const b = grayPatch[yy * n + xx];
+              const a = centered[y * n + x];
+              const b = centered[yy * n + xx];
 
               sum += a * b;
               energy += a * a;
@@ -581,51 +595,54 @@
 
       return out;
     }
+
     function renderAutocorrelationAt(x, y) {
       if (!state.autocorrEnabled || !state.displayedImageData) return;
-    
+
       const patchSize = state.patchSize;
       const cx = Math.round(x);
       const cy = Math.round(y);
-    
+
       const patch = extractPatchGray(state.displayedImageData, cx, cy, patchSize);
       const ac = computeAutocorrelation2D(patch, patchSize);
-    
-      const displayField =
-        state.displayMode === "laplacian"
-          ? computeLaplacian2D(ac, patchSize, patchSize)
-          : ac;
-    
-      const gray = normalizeToUint8(displayField);
+
+      let displayField;
+      if (state.displayMode === "laplacian") {
+        displayField = computeLaplacian2D(ac, patchSize, patchSize);
+      } else {
+        displayField = ac;
+      }
+
+      const gray = thresholdAndNormalize(displayField, state.peakThresholdRatio);
       const img = createImageDataFromGray(gray, patchSize, patchSize);
-    
+
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = patchSize;
       tempCanvas.height = patchSize;
-    
-      const tctx = tempCanvas.getContext("2d");
+
+      const tctx = tempCanvas.getContext("2d", { willReadFrequently: true });
       tctx.putImageData(img, 0, 0);
-    
+
       acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
       acorrCtx.imageSmoothingEnabled = false;
       acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
-    
+
       drawCross(
         acorrCtx,
         acorrCanvas.width / 2,
         acorrCanvas.height / 2,
-        "cyan",
+        "#00ffff",
         5,
         1
       );
-    
+
       if (acorrModeLabel) {
         acorrModeLabel.textContent =
           state.displayMode === "laplacian"
             ? "Laplacian of Autocorrelation"
             : "Autocorrelation";
       }
-    
+
       patchSizeLabel.textContent = `Patch: ${patchSize} px`;
       patchSizeInline.textContent = patchSize;
     }
@@ -742,11 +759,11 @@
       event.preventDefault();
 
       const step = event.deltaY < 0 ? 8 : -8;
-      state.patchSize = clamp(state.patchSize + step, 32, 128);
+      state.patchSize = clamp(state.patchSize + step, 60, 128);
 
       if (state.patchSize % 2 !== 0) {
         state.patchSize += event.deltaY < 0 ? 1 : -1;
-        state.patchSize = clamp(state.patchSize, 32, 128);
+        state.patchSize = clamp(state.patchSize, 60, 128);
       }
 
       patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;

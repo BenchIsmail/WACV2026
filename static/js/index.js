@@ -89,6 +89,17 @@
     // =========================================================
     // UTILS
     // =========================================================
+    function updateContrast(delta) {
+      state.contrast = clamp(state.contrast + delta, 0.2, 5);
+      state.contrast = Math.round(state.contrast * 10) / 10;
+    
+      contrastSlider.value = state.contrast;
+      contrastValue.textContent = `${state.contrast.toFixed(1)}×`;
+    
+      if (state.autocorrEnabled) {
+        renderAutocorrelationAt(state.mouseX, state.mouseY);
+      }
+    }
     function clamp(v, a, b) {
       return Math.max(a, Math.min(b, v));
     }
@@ -556,6 +567,17 @@
     // =========================================================
     // EVENTS
     // =========================================================
+    window.addEventListener("keydown", (event) => {
+      if (!state.autocorrEnabled) return;
+    
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        updateContrast(0.1);
+      } else if (event.key === "ArrowDown") {
+        event.preventDefault();
+        updateContrast(-0.1);
+      }
+    });
     btnGenerate.addEventListener("click", () => {
       renderGeneratedTexture();
     });

@@ -465,7 +465,7 @@
   <div id="acorr-preview">
     <div class="acorr-preview-inner">
       <div class="acorr-preview-header">
-        <span>Autocorrelation</span>
+        <span id="acorr-mode-label">Autocorrelation</span>
         <span id="patch-size-label">Patch: 128 px</span>
       </div>
 
@@ -473,7 +473,7 @@
 
       <div class="acorr-controls">
         <label for="acorr-contrast">Contrast</label>
-        <input id="acorr-contrast" type="range" min="0.2" max="5" step="0.1" value="1.5">
+        <input id="acorr-contrast" type="range" min="0.05" max="1" step="0.01" value="0.25">
         <span id="acorr-contrast-value">1.5×</span>
       </div>
     </div>
@@ -602,7 +602,7 @@
 
             <button id="btn-toggle-autocorr" class="button is-warning is-rounded">
               <span class="icon"><i class="fas fa-magnifying-glass"></i></span>
-              <span>Autocorrelation</span>
+              <span id="acorr-mode-label">Autocorrelation</span>
             </button>
           </div>
 

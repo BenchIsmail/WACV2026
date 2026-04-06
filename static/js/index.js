@@ -189,28 +189,34 @@
       ctx.stroke();
       ctx.restore();
     }
-
+    
     function applyBinaryDilation(gray, w, h, radius) {
       const out = new Uint8ClampedArray(w * h);
+    
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          let found = false;
-          for (let dy = -radius; dy <= radius && !found; dy++) {
+          let makeBlack = false;
+    
+          for (let dy = -radius; dy <= radius && !makeBlack; dy++) {
             for (let dx = -radius; dx <= radius; dx++) {
               const xx = x + dx;
               const yy = y + dy;
+    
               if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
+    
               if (gray[yy * w + xx] === 0) {
-                found = true;
+                makeBlack = true;
                 break;
               }
             }
           }
-          out[y * w + x] = found ? 0 : 255;
+    
+          out[y * w + x] = makeBlack ? 0 : 255;
         }
       }
+    
       return out;
-    }
+}
 
     // =========================================================
     // TEXTURE GENERATION
@@ -221,79 +227,81 @@
       for (let i = 0; i < base.length; i++) {
         base[i] = Math.random() * 2 - 1;
       }
-
+    
       const out = new Float64Array(w * h);
-
-      function rollIndex(x, y, sx, sy) {
-        let xx = (x - sx) % w;
-        let yy = (y - sy) % h;
+    
+      function wrappedIndex(x, y) {
+        let xx = x % w;
+        let yy = y % h;
         if (xx < 0) xx += w;
         if (yy < 0) yy += h;
         return yy * w + xx;
       }
-
+    
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const idx = y * w + x;
-          out[idx] =
-            base[idx] +
-            base[rollIndex(x, y, shift1.x, shift1.y)] +
-            base[rollIndex(x, y, shift2.x, shift2.y)];
+    
+          const idx1 = wrappedIndex(x - shift1.x, y - shift1.y);
+          const idx2 = wrappedIndex(x - shift2.x, y - shift2.y);
+    
+          out[idx] = base[idx] + base[idx1] + base[idx2];
         }
       }
-      return out*255;
+    
+      return out;
     }
-
-    function genRandomBinaryTexture(w, h, dilationSize, density, angleShiftDeg, normShift) {
+    
+    function percentile(values, p) {
+      const arr = Array.from(values).sort((a, b) => a - b);
+      const idx = Math.floor(clamp(p, 0, 1) * (arr.length - 1));
+      return arr[idx];
+    }
+    
+    function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift) {
       const k = angleShiftDeg * Math.PI / 180.0;
+    
       const shift1 = { x: 0, y: Math.round(normShift) };
       const shift2 = {
         x: Math.round(normShift * Math.sin(k)),
         y: Math.round(normShift * Math.cos(k))
       };
-
+    
       const combined = generateWhiteNoiseAndShifts(w, h, shift1, shift2);
-
-      let min = Infinity;
-      let max = -Infinity;
-      for (let i = 0; i < combined.length; i++) {
-        const v = combined[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-
-      const threshold = lerp(min, max, density);
+    
+      // occupancy = proportion de pixels noirs voulue
+      // ex: occupancy = 0.18 => environ 18% de pixels noirs avant dilation
+      const thr = percentile(combined, occupancy);
+    
       const binary = new Uint8ClampedArray(w * h);
+    
       for (let i = 0; i < combined.length; i++) {
-        binary[i] = combined[i] > threshold ? 255 : 0;
+        binary[i] = combined[i] <= thr ? 0 : 255;
       }
-
-      const inv = new Uint8ClampedArray(w * h);
-      for (let i = 0; i < binary.length; i++) {
-        inv[i] = binary[i] === 0 ? 0 : 255;
-      }
-
-      return applyBinaryDilation(inv, w, h, dilationSize);
+    
+      const dilated = applyBinaryDilation(binary, w, h, dilationSize);
+      return dilated;
     }
-
+    
     function renderGeneratedTexture() {
       const w = state.size;
       const h = state.size;
-
+    
       const gray = genRandomBinaryTexture(
         w,
         h,
-        2,      // dilation size
-        0.66,   // density threshold
+        1,      // dilation size
+        0.16,   // proportion de noir
         60,     // angle shift
-        60      // norm shift
+        58      // norm shift
       );
-
+    
       const img = createImageDataFromGray(gray, w, h);
       state.sourceImageData = img;
       state.sourceCtx.putImageData(img, 0, 0);
       applyCurrentProjection();
     }
+
 
     // =========================================================
     // PROJECTIONS

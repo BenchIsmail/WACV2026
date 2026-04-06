@@ -73,12 +73,12 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
-      patchSize: 128,
+      patchSize: 60,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
-      mouseX: 450,
-      mouseY: 450,
+      mouseX: 300,
+      mouseY: 300,
       displayMode: "autocorr", // "autocorr" | "laplacian"
       peakThresholdRatio: 0.25
     };
@@ -112,12 +112,9 @@
 
       const out = new Uint8ClampedArray(arr.length);
 
-      if (max <= min) {
-        return out;
-      }
+      if (max <= min) return out;
 
       const scale = 255 / (max - min);
-
       for (let i = 0; i < arr.length; i++) {
         out[i] = clamp(Math.round((arr[i] - min) * scale), 0, 255);
       }
@@ -164,10 +161,8 @@
 
       for (let j = 0; j < patchSize; j++) {
         const yy = cy - half + j;
-
         for (let i = 0; i < patchSize; i++) {
           const xx = cx - half + i;
-
           if (xx >= 0 && xx < w && yy >= 0 && yy < h) {
             out[k++] = sampleGrayFromImageData(imageData, xx, yy);
           } else {
@@ -225,7 +220,6 @@
           const right = arr[y * w + clamp(x + 1, 0, w - 1)];
           const up = arr[clamp(y - 1, 0, h - 1) * w + x];
           const down = arr[clamp(y + 1, 0, h - 1) * w + x];
-
           out[y * w + x] = left + right + up + down - 4 * c;
         }
       }
@@ -246,7 +240,6 @@
           for (let dy = -1; dy <= 1 && isLocalMax; dy++) {
             for (let dx = -1; dx <= 1; dx++) {
               if (dx === 0 && dy === 0) continue;
-
               const n = arr[(y + dy) * w + (x + dx)];
               if (n > v) {
                 isLocalMax = false;
@@ -255,9 +248,7 @@
             }
           }
 
-          if (isLocalMax) {
-            mask[y * w + x] = 255;
-          }
+          if (isLocalMax) mask[y * w + x] = 255;
         }
       }
 
@@ -277,7 +268,6 @@
               const yy = y + dy;
 
               if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-
               if (mask[yy * w + xx] > 0) {
                 on = true;
                 break;
@@ -305,7 +295,6 @@
               const yy = y + dy;
 
               if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-
               if (gray[yy * w + xx] === 0) {
                 makeBlack = true;
                 break;
@@ -347,10 +336,8 @@
       function wrappedIndex(x, y) {
         let xx = x % w;
         let yy = y % h;
-
         if (xx < 0) xx += w;
         if (yy < 0) yy += h;
-
         return yy * w + xx;
       }
 
@@ -359,7 +346,6 @@
           const idx = y * w + x;
           const idx1 = wrappedIndex(x - shift1.x, y - shift1.y);
           const idx2 = wrappedIndex(x - shift2.x, y - shift2.y);
-
           out[idx] = base[idx] + base[idx1] + base[idx2];
         }
       }
@@ -386,7 +372,6 @@
       const thr = percentile(combined, occupancy);
 
       const binary = new Uint8ClampedArray(w * h);
-
       for (let i = 0; i < combined.length; i++) {
         binary[i] = combined[i] <= thr ? 0 : 255;
       }
@@ -410,7 +395,6 @@
       const img = createImageDataFromGray(gray, w, h);
       state.sourceImageData = img;
       state.sourceCtx.putImageData(img, 0, 0);
-
       applyCurrentProjection();
     }
 
@@ -446,7 +430,6 @@
     function applyPerspectiveProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-
       const out = new ImageData(w, h);
       const src = imageData.data;
       const dst = out.data;
@@ -491,7 +474,6 @@
     function applyCylindricalProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-
       const src = imageData.data;
       const out = new ImageData(w, h);
       const dst = out.data;
@@ -558,7 +540,6 @@
 
     function redrawMainCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       if (state.displayedImageData) {
         ctx.putImageData(state.displayedImageData, 0, 0);
       }
@@ -611,12 +592,10 @@
       const patch = extractPatchGray(state.displayedImageData, cx, cy, patchSize);
       const ac = computeAutocorrelation2D(patch, patchSize);
 
-      let displayField;
-      if (state.displayMode === "laplacian") {
-        displayField = computeLaplacian2D(ac, patchSize, patchSize);
-      } else {
-        displayField = ac;
-      }
+      const displayField =
+        state.displayMode === "laplacian"
+          ? computeLaplacian2D(ac, patchSize, patchSize)
+          : ac;
 
       const gray = normalizeToUint8(displayField);
       const img = createImageDataFromGray(gray, patchSize, patchSize);
@@ -689,7 +668,6 @@
       if (left + rect.width > window.innerWidth - 8) {
         left = clientX - rect.width - pad;
       }
-
       if (top + rect.height > window.innerHeight - 8) {
         top = clientY - rect.height - pad;
       }
@@ -761,6 +739,7 @@
       if (state.autocorrEnabled) {
         acorrPreview.style.display = "block";
         updateAutocorrPreviewPosition(event.clientX, event.clientY);
+        renderAutocorrelationAt(state.mouseX, state.mouseY);
       }
     });
 
@@ -791,10 +770,11 @@
       event.preventDefault();
 
       const step = event.deltaY < 0 ? 8 : -8;
-      state.patchSize = clamp(state.patchSize + step, 32, 256);
+      state.patchSize = clamp(state.patchSize + step, 32, 128);
 
       if (state.patchSize % 2 !== 0) {
-        state.patchSize += 1;
+        state.patchSize += event.deltaY < 0 ? 1 : -1;
+        state.patchSize = clamp(state.patchSize, 32, 128);
       }
 
       patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;

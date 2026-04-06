@@ -1,50 +1,6 @@
 (function () {
   "use strict";
 
-  // =========================================================
-  // BASIC PAGE HELPERS
-  // =========================================================
-  window.scrollToTop = function () {
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  window.copyBibTeX = function () {
-    const el = document.getElementById("bibtex-code");
-    if (!el) return;
-
-    const text = el.innerText;
-    navigator.clipboard.writeText(text).then(() => {
-      const btn = document.querySelector(".copy-bibtex-btn .copy-text");
-      if (!btn) return;
-
-      const oldText = btn.textContent;
-      btn.textContent = "Copied";
-
-      setTimeout(() => {
-        btn.textContent = oldText;
-      }, 1500);
-    });
-  };
-
-  // =========================================================
-  // SIMPLE CAROUSEL INIT
-  // =========================================================
-  document.addEventListener("DOMContentLoaded", () => {
-    if (window.bulmaCarousel) {
-      window.bulmaCarousel.attach("#results-carousel", {
-        slidesToScroll: 1,
-        slidesToShow: 1,
-        loop: true,
-        autoplay: true,
-        autoplaySpeed: 3500,
-        pauseOnHover: true
-      });
-    }
-  });
-
-  // =========================================================
-  // INTERACTIVE DEMO
-  // =========================================================
   document.addEventListener("DOMContentLoaded", () => {
     const canvas = document.getElementById("interactive-canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -64,9 +20,19 @@
     const contrastSlider = document.getElementById("acorr-contrast");
     const contrastValue = document.getElementById("acorr-contrast-value");
     const acorrModeLabel = document.getElementById("acorr-mode-label");
+    const acorrModeInline = document.getElementById("acorr-mode-inline");
+
+    const perspTiltXLabel = document.getElementById("persp-tilt-x-label");
+    const perspTiltYLabel = document.getElementById("persp-tilt-y-label");
+
+    const affineRotZLabel = document.getElementById("affine-rot-z-label");
+    const affineTiltLabel = document.getElementById("affine-tilt-label");
+    const affineOrientLabel = document.getElementById("affine-orient-label");
+
+    const cylRotZLabel = document.getElementById("cyl-rot-z-label");
 
     const state = {
-      size: 600,
+      size: 900,
       sourceCanvas: document.createElement("canvas"),
       sourceCtx: null,
       displayedCanvas: document.createElement("canvas"),
@@ -77,10 +43,36 @@
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
-      mouseX: 300,
-      mouseY: 300,
-      displayMode: "autocorr", // "autocorr" | "laplacian"
-      peakThresholdRatio: 0.25
+      mouseX: 450,
+      mouseY: 450,
+      displayMode: "autocorr",
+      peakThresholdRatio: 0.25,
+
+      texture: {
+        dotSize: 3,
+        cellSize: 3,
+        occupancy: 0.12,
+        angleShiftDeg: 90,
+        normShiftPx: 24
+      },
+
+      perspective: {
+        tiltXDeg: 25,
+        tiltYDeg: -8,
+        focal: 1.35
+      },
+
+      affine: {
+        rotZDeg: -18,
+        tilt: 0.28,
+        orientDeg: 32
+      },
+
+      cylindrical: {
+        rotZDeg: 0,
+        cylinderStrength: 1.05,
+        perspectiveDrop: 0.35
+      }
     };
 
     let canvasHovered = false;
@@ -93,99 +85,32 @@
     state.displayedCanvas.height = state.size;
     state.displayedCtx = state.displayedCanvas.getContext("2d", { willReadFrequently: true });
 
-    // =========================================================
-    // UTILS
-    // =========================================================
     function clamp(v, a, b) {
       return Math.max(a, Math.min(b, v));
     }
 
-    function arrayMin(arr) {
-      let m = Infinity;
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i] < m) m = arr[i];
-      }
-      return m;
+    function degToRad(d) {
+      return d * Math.PI / 180;
     }
 
-    function arrayMax(arr) {
-      let m = -Infinity;
-      for (let i = 0; i < arr.length; i++) {
-        if (arr[i] > m) m = arr[i];
-      }
-      return m;
+    function wrapAngleDeg(d) {
+      let x = d;
+      while (x > 180) x -= 360;
+      while (x < -180) x += 360;
+      return x;
     }
 
-    function normalizeToUint8(arr) {
-      let min = Infinity;
-      let max = -Infinity;
-
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
+    function createImageDataFromGray(gray, w, h) {
+      const img = new ImageData(w, h);
+      for (let i = 0; i < gray.length; i++) {
+        const v = gray[i];
+        const idx = i * 4;
+        img.data[idx] = v;
+        img.data[idx + 1] = v;
+        img.data[idx + 2] = v;
+        img.data[idx + 3] = 255;
       }
-
-      const out = new Uint8ClampedArray(arr.length);
-
-      if (max <= min) return out;
-
-      const scale = 255 / (max - min);
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = clamp(Math.round((arr[i] - min) * scale), 0, 255);
-      }
-
-      return out;
-    }
-
-    function thresholdAndNormalize(arr, ratio) {
-      const out = new Uint8ClampedArray(arr.length);
-
-      let minVal = Infinity;
-      let maxVal = -Infinity;
-
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < minVal) minVal = v;
-        if (v > maxVal) maxVal = v;
-      }
-
-      if (!(maxVal > minVal)) {
-        return out;
-      }
-
-      const threshold = minVal + ratio * (maxVal - minVal);
-
-      let keptMin = Infinity;
-      let keptMax = -Infinity;
-
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v >= threshold) {
-          if (v < keptMin) keptMin = v;
-          if (v > keptMax) keptMax = v;
-        }
-      }
-
-      if (!(keptMax > keptMin)) {
-        for (let i = 0; i < arr.length; i++) {
-          out[i] = arr[i] >= threshold ? 255 : 0;
-        }
-        return out;
-      }
-
-      const scale = 255 / (keptMax - keptMin);
-
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < threshold) {
-          out[i] = 0;
-        } else {
-          out[i] = clamp(Math.round((v - keptMin) * scale), 0, 255);
-        }
-      }
-
-      return out;
+      return img;
     }
 
     function canvasToImageData(srcCanvas) {
@@ -197,7 +122,6 @@
       const rect = targetCanvas.getBoundingClientRect();
       const sx = targetCanvas.width / rect.width;
       const sy = targetCanvas.height / rect.height;
-
       return {
         x: (event.clientX - rect.left) * sx,
         y: (event.clientY - rect.top) * sy
@@ -240,34 +164,6 @@
       return out;
     }
 
-    function createImageDataFromGray(gray, w, h) {
-      const img = new ImageData(w, h);
-
-      for (let i = 0; i < gray.length; i++) {
-        const v = gray[i];
-        const idx = i * 4;
-        img.data[idx] = v;
-        img.data[idx + 1] = v;
-        img.data[idx + 2] = v;
-        img.data[idx + 3] = 255;
-      }
-
-      return img;
-    }
-
-    function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
-      targetCtx.save();
-      targetCtx.strokeStyle = color;
-      targetCtx.lineWidth = lineWidth;
-      targetCtx.beginPath();
-      targetCtx.moveTo(x - size, y);
-      targetCtx.lineTo(x + size, y);
-      targetCtx.moveTo(x, y - size);
-      targetCtx.lineTo(x, y + size);
-      targetCtx.stroke();
-      targetCtx.restore();
-    }
-
     function computeLaplacian2D(arr, w, h) {
       const out = new Float64Array(w * h);
 
@@ -285,24 +181,152 @@
       return out;
     }
 
-    function updatePeakThreshold(delta) {
-      state.peakThresholdRatio = clamp(state.peakThresholdRatio + delta, 0.05, 1.0);
-      state.peakThresholdRatio = Math.round(state.peakThresholdRatio * 100) / 100;
+    function thresholdAndNormalize(arr, ratio) {
+      const out = new Uint8ClampedArray(arr.length);
 
-      contrastSlider.value = String(state.peakThresholdRatio);
-      contrastValue.textContent = `${state.peakThresholdRatio.toFixed(2)}·max`;
-
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
+      let minVal = Infinity;
+      let maxVal = -Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < minVal) minVal = v;
+        if (v > maxVal) maxVal = v;
       }
+
+      if (!(maxVal > minVal)) {
+        return out;
+      }
+
+      const threshold = minVal + ratio * (maxVal - minVal);
+
+      let keptMin = Infinity;
+      let keptMax = -Infinity;
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v >= threshold) {
+          if (v < keptMin) keptMin = v;
+          if (v > keptMax) keptMax = v;
+        }
+      }
+
+      if (!(keptMax > keptMin)) {
+        for (let i = 0; i < arr.length; i++) {
+          out[i] = arr[i] >= threshold ? 255 : 0;
+        }
+        return out;
+      }
+
+      const scale = 255 / (keptMax - keptMin);
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        out[i] = v < threshold ? 0 : clamp(Math.round((v - keptMin) * scale), 0, 255);
+      }
+
+      return out;
     }
 
-    // =========================================================
-    // TEXTURE GENERATION
-    // =========================================================
+    function computeAutocorrelation2D(grayPatch, n) {
+      const out = new Float64Array(n * n);
+      const center = Math.floor(n / 2);
+
+      let mean = 0;
+      for (let i = 0; i < grayPatch.length; i++) mean += grayPatch[i];
+      mean /= grayPatch.length;
+
+      const centered = new Float64Array(grayPatch.length);
+      for (let i = 0; i < grayPatch.length; i++) {
+        centered[i] = grayPatch[i] - mean;
+      }
+
+      for (let dy = -center; dy <= center; dy++) {
+        for (let dx = -center; dx <= center; dx++) {
+          let sum = 0.0;
+          let energy = 0.0;
+
+          for (let y = 0; y < n; y++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= n) continue;
+
+            for (let x = 0; x < n; x++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= n) continue;
+
+              const a = centered[y * n + x];
+              const b = centered[yy * n + xx];
+              sum += a * b;
+              energy += a * a;
+            }
+          }
+
+          const oy = dy + center;
+          const ox = dx + center;
+          out[oy * n + ox] = energy > 1e-9 ? sum / energy : 0;
+        }
+      }
+
+      return out;
+    }
+
+    function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
+      targetCtx.save();
+      targetCtx.strokeStyle = color;
+      targetCtx.lineWidth = lineWidth;
+      targetCtx.beginPath();
+      targetCtx.moveTo(x - size, y);
+      targetCtx.lineTo(x + size, y);
+      targetCtx.moveTo(x, y - size);
+      targetCtx.lineTo(x, y + size);
+      targetCtx.stroke();
+      targetCtx.restore();
+    }
+
+    function updateAutocorrPreviewPosition(clientX, clientY) {
+      const pad = 18;
+      let left = clientX + pad;
+      let top = clientY + pad;
+
+      const rect = acorrPreview.getBoundingClientRect();
+
+      if (left + rect.width > window.innerWidth - 8) {
+        left = clientX - rect.width - pad;
+      }
+      if (top + rect.height > window.innerHeight - 8) {
+        top = clientY - rect.height - pad;
+      }
+
+      acorrPreview.style.left = `${left}px`;
+      acorrPreview.style.top = `${top}px`;
+    }
+
+    function updateLabels() {
+      projectionModeLabel.textContent = state.projectionModes[state.projectionIndex];
+      patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
+      patchSizeInline.textContent = String(state.patchSize);
+      autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
+      contrastValue.textContent = `${state.peakThresholdRatio.toFixed(2)}·max`;
+
+      const acText = state.displayMode === "laplacian"
+        ? "Laplacian of Autocorrelation"
+        : "Autocorrelation";
+      acorrModeLabel.textContent = acText;
+      acorrModeInline.textContent = acText;
+
+      perspTiltXLabel.textContent = `${state.perspective.tiltXDeg}°`;
+      perspTiltYLabel.textContent = `${state.perspective.tiltYDeg}°`;
+
+      affineRotZLabel.textContent = `${state.affine.rotZDeg}°`;
+      affineTiltLabel.textContent = state.affine.tilt.toFixed(2);
+      affineOrientLabel.textContent = `${state.affine.orientDeg}°`;
+
+      cylRotZLabel.textContent = `${state.cylindrical.rotZDeg}°`;
+    }
+
+    function refreshAutocorrStateUI() {
+      acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
+      updateLabels();
+    }
+
     function generateWhiteNoiseAndShifts(w, h, shift1, shift2) {
       const base = new Float64Array(w * h);
-
       for (let i = 0; i < base.length; i++) {
         base[i] = Math.random() * 2 - 1;
       }
@@ -335,139 +359,165 @@
       return arr[idx];
     }
 
-    function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift) {
-      const k = angleShiftDeg * Math.PI / 180.0;
+    function build3x3Texture(w, h) {
+      const cell = state.texture.cellSize;
+      const gw = Math.ceil(w / cell);
+      const gh = Math.ceil(h / cell);
 
-      const shift1 = { x: 0, y: Math.round(normShift) };
+      const angle = degToRad(state.texture.angleShiftDeg);
+      const shiftPix = state.texture.normShiftPx;
+      const shiftCells = Math.max(1, Math.round(shiftPix / cell));
+
+      const shift1 = { x: 0, y: shiftCells };
       const shift2 = {
-        x: Math.round(normShift * Math.sin(k)),
-        y: Math.round(normShift * Math.cos(k))
+        x: Math.round(shiftCells * Math.sin(angle)),
+        y: Math.round(shiftCells * Math.cos(angle))
       };
 
-      const combined = generateWhiteNoiseAndShifts(w, h, shift1, shift2);
-      const thr = percentile(combined, occupancy);
+      const combined = generateWhiteNoiseAndShifts(gw, gh, shift1, shift2);
+      const thr = percentile(combined, state.texture.occupancy);
 
-      const binary = new Uint8ClampedArray(w * h);
+      const coarse = new Uint8ClampedArray(gw * gh);
       for (let i = 0; i < combined.length; i++) {
-        binary[i] = combined[i] <= thr ? 0 : 255;
+        coarse[i] = combined[i] <= thr ? 0 : 255;
       }
 
-      return applyBinaryDilation(binary, w, h, dilationSize);
-    }
+      const gray = new Uint8ClampedArray(w * h);
 
-    function applyBinaryDilation(gray, w, h, radius) {
-      const out = new Uint8ClampedArray(w * h);
+      for (let gy = 0; gy < gh; gy++) {
+        for (let gx = 0; gx < gw; gx++) {
+          const v = coarse[gy * gw + gx];
+          const x0 = gx * cell;
+          const y0 = gy * cell;
 
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          let makeBlack = false;
-
-          for (let dy = -radius; dy <= radius && !makeBlack; dy++) {
-            for (let dx = -radius; dx <= radius; dx++) {
-              const xx = x + dx;
-              const yy = y + dy;
-
-              if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-              if (gray[yy * w + xx] === 0) {
-                makeBlack = true;
-                break;
-              }
+          for (let yy = y0; yy < y0 + cell && yy < h; yy++) {
+            for (let xx = x0; xx < x0 + cell && xx < w; xx++) {
+              gray[yy * w + xx] = v;
             }
           }
-
-          out[y * w + x] = makeBlack ? 0 : 255;
         }
       }
 
-      return out;
+      return gray;
     }
 
     function renderGeneratedTexture() {
       const w = state.size;
       const h = state.size;
-
-      const gray = genRandomBinaryTexture(
-        w,
-        h,
-        1,
-        0.1,
-        90,
-        22
-      );
-
+      const gray = build3x3Texture(w, h);
       const img = createImageDataFromGray(gray, w, h);
       state.sourceImageData = img;
       state.sourceCtx.putImageData(img, 0, 0);
       applyCurrentProjection();
     }
 
-    // =========================================================
-    // PROJECTIONS
-    // =========================================================
-    function applyAffineProjection(imageData) {
-      const tmpCanvas = document.createElement("canvas");
-      tmpCanvas.width = imageData.width;
-      tmpCanvas.height = imageData.height;
+    function sampleSourceRGBA(imageData, x, y) {
+      const w = imageData.width;
+      const h = imageData.height;
+      const xi = Math.round(x);
+      const yi = Math.round(y);
 
-      const tctx = tmpCanvas.getContext("2d");
-      tctx.putImageData(imageData, 0, 0);
+      if (xi < 0 || xi >= w || yi < 0 || yi >= h) {
+        return [255, 255, 255, 255];
+      }
 
-      const outCanvas = document.createElement("canvas");
-      outCanvas.width = imageData.width;
-      outCanvas.height = imageData.height;
-
-      const octx = outCanvas.getContext("2d");
-      octx.fillStyle = "white";
-      octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-
-      octx.save();
-      octx.translate(outCanvas.width / 2, outCanvas.height / 2);
-      octx.rotate(-18 * Math.PI / 180);
-      octx.transform(0.9, -0.18, 0.38, 0.95, 0, 0);
-      octx.drawImage(tmpCanvas, -outCanvas.width / 2, -outCanvas.height / 2);
-      octx.restore();
-
-      return canvasToImageData(outCanvas);
+      const idx = (yi * w + xi) * 4;
+      const d = imageData.data;
+      return [d[idx], d[idx + 1], d[idx + 2], 255];
     }
 
-    function applyPerspectiveProjection(imageData) {
+    function rotatePoint(x, y, angleRad) {
+      const c = Math.cos(angleRad);
+      const s = Math.sin(angleRad);
+      return {
+        x: c * x - s * y,
+        y: s * x + c * y
+      };
+    }
+
+    function applyAffineProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
       const out = new ImageData(w, h);
-      const src = imageData.data;
-      const dst = out.data;
 
       const cx = w / 2;
       const cy = h / 2;
-      const ax = 0.55;
-      const ay = -0.15;
-      const focal = 1.35;
+
+      const rotZ = degToRad(state.affine.rotZDeg);
+      const orient = degToRad(state.affine.orientDeg);
+      const tilt = state.affine.tilt;
+
+      const cu = Math.cos(orient);
+      const su = Math.sin(orient);
+
+      const a1 = 1 + tilt;
+      const a2 = 1 - 0.45 * tilt;
 
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
 
-          const u = xn / (1 + ax * yn);
-          const v = yn / (1 + ay * xn);
+          const p0 = rotatePoint(xn, yn, -rotZ);
 
-          const sx = Math.round((u / focal) * cx + cx);
-          const sy = Math.round((v / focal) * cy + cy);
+          const u = cu * p0.x + su * p0.y;
+          const v = -su * p0.x + cu * p0.y;
+
+          const uu = u / a1;
+          const vv = v / a2;
+
+          const srcDirX = cu * uu - su * vv;
+          const srcDirY = su * uu + cu * vv;
+
+          const sx = srcDirX * cx + cx;
+          const sy = srcDirY * cy + cy;
 
           const di = (y * w + x) * 4;
+          const rgba = sampleSourceRGBA(imageData, sx, sy);
 
-          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-            const si = (sy * w + sx) * 4;
-            dst[di] = src[si];
-            dst[di + 1] = src[si + 1];
-            dst[di + 2] = src[si + 2];
-            dst[di + 3] = 255;
-          } else {
-            dst[di] = 255;
-            dst[di + 1] = 255;
-            dst[di + 2] = 255;
-            dst[di + 3] = 255;
-          }
+          out.data[di] = rgba[0];
+          out.data[di + 1] = rgba[1];
+          out.data[di + 2] = rgba[2];
+          out.data[di + 3] = 255;
+        }
+      }
+
+      return out;
+    }
+
+    function applyPerspectiveProjection(imageData) {
+      const w = imageData.width;
+      const h = imageData.height;
+      const out = new ImageData(w, h);
+
+      const cx = w / 2;
+      const cy = h / 2;
+
+      const ax = Math.tan(degToRad(state.perspective.tiltXDeg));
+      const ay = Math.tan(degToRad(state.perspective.tiltYDeg));
+      const focal = state.perspective.focal;
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const xn = (x - cx) / cx;
+          const yn = (y - cy) / cy;
+
+          const denomX = 1 + ax * yn;
+          const denomY = 1 + ay * xn;
+
+          const u = xn / denomX;
+          const v = yn / denomY;
+
+          const sx = (u / focal) * cx + cx;
+          const sy = (v / focal) * cy + cy;
+
+          const di = (y * w + x) * 4;
+          const rgba = sampleSourceRGBA(imageData, sx, sy);
+
+          out.data[di] = rgba[0];
+          out.data[di + 1] = rgba[1];
+          out.data[di + 2] = rgba[2];
+          out.data[di + 3] = 255;
         }
       }
 
@@ -477,48 +527,49 @@
     function applyCylindricalProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-      const src = imageData.data;
       const out = new ImageData(w, h);
-      const dst = out.data;
 
       const cx = w / 2;
       const cy = h / 2;
 
-      const cylinderStrength = 1.05;
-      const perspectiveDrop = 0.35;
+      const rotZ = degToRad(state.cylindrical.rotZDeg);
+      const cylinderStrength = state.cylindrical.cylinderStrength;
+      const perspectiveDrop = state.cylindrical.perspectiveDrop;
 
       for (let y = 0; y < h; y++) {
-        const yn = (y - cy) / cy;
-
         for (let x = 0; x < w; x++) {
-          const xn = (x - cx) / cx;
+          const xn0 = (x - cx) / cx;
+          const yn0 = (y - cy) / cy;
 
-          const theta = xn * cylinderStrength;
-          const srcXn = Math.sin(theta) / Math.sin(cylinderStrength);
+          const p = rotatePoint(xn0, yn0, -rotZ);
+
+          const theta = p.x * cylinderStrength;
+          const sinDen = Math.sin(cylinderStrength);
+          const srcXn = Math.abs(sinDen) < 1e-9 ? p.x : Math.sin(theta) / sinDen;
           const depth = Math.cos(theta);
-          const srcYn = yn / (1 + perspectiveDrop * (1 - depth));
+          const srcYn = p.y / (1 + perspectiveDrop * (1 - depth));
 
-          const sx = Math.round(srcXn * cx + cx);
-          const sy = Math.round(srcYn * cy + cy);
+          const sx = srcXn * cx + cx;
+          const sy = srcYn * cy + cy;
 
           const di = (y * w + x) * 4;
+          const rgba = sampleSourceRGBA(imageData, sx, sy);
 
-          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-            const si = (sy * w + sx) * 4;
-            dst[di] = src[si];
-            dst[di + 1] = src[si + 1];
-            dst[di + 2] = src[si + 2];
-            dst[di + 3] = 255;
-          } else {
-            dst[di] = 255;
-            dst[di + 1] = 255;
-            dst[di + 2] = 255;
-            dst[di + 3] = 255;
-          }
+          out.data[di] = rgba[0];
+          out.data[di + 1] = rgba[1];
+          out.data[di + 2] = rgba[2];
+          out.data[di + 3] = 255;
         }
       }
 
       return out;
+    }
+
+    function redrawMainCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (state.displayedImageData) {
+        ctx.putImageData(state.displayedImageData, 0, 0);
+      }
     }
 
     function applyCurrentProjection() {
@@ -538,62 +589,11 @@
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
       redrawMainCanvas();
-      projectionModeLabel.textContent = mode;
-    }
+      updateLabels();
 
-    function redrawMainCanvas() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (state.displayedImageData) {
-        ctx.putImageData(state.displayedImageData, 0, 0);
+      if (state.autocorrEnabled) {
+        renderAutocorrelationAt(state.mouseX, state.mouseY);
       }
-    }
-
-    // =========================================================
-    // AUTOCORRELATION
-    // =========================================================
-    function computeAutocorrelation2D(grayPatch, n) {
-      const out = new Float64Array(n * n);
-      const center = Math.floor(n / 2);
-
-      let mean = 0;
-      for (let i = 0; i < grayPatch.length; i++) {
-        mean += grayPatch[i];
-      }
-      mean /= grayPatch.length;
-
-      const centered = new Float64Array(grayPatch.length);
-      for (let i = 0; i < grayPatch.length; i++) {
-        centered[i] = grayPatch[i] - mean;
-      }
-
-      for (let dy = -center; dy <= center; dy++) {
-        for (let dx = -center; dx <= center; dx++) {
-          let sum = 0.0;
-          let energy = 0.0;
-
-          for (let y = 0; y < n; y++) {
-            const yy = y + dy;
-            if (yy < 0 || yy >= n) continue;
-
-            for (let x = 0; x < n; x++) {
-              const xx = x + dx;
-              if (xx < 0 || xx >= n) continue;
-
-              const a = centered[y * n + x];
-              const b = centered[yy * n + xx];
-
-              sum += a * b;
-              energy += a * a;
-            }
-          }
-
-          const oy = dy + center;
-          const ox = dx + center;
-          out[oy * n + ox] = energy > 1e-9 ? sum / energy : 0;
-        }
-      }
-
-      return out;
     }
 
     function renderAutocorrelationAt(x, y) {
@@ -606,12 +606,9 @@
       const patch = extractPatchGray(state.displayedImageData, cx, cy, patchSize);
       const ac = computeAutocorrelation2D(patch, patchSize);
 
-      let displayField;
-      if (state.displayMode === "laplacian") {
-        displayField = computeLaplacian2D(ac, patchSize, patchSize);
-      } else {
-        displayField = ac;
-      }
+      const displayField = state.displayMode === "laplacian"
+        ? computeLaplacian2D(ac, patchSize, patchSize)
+        : ac;
 
       const gray = thresholdAndNormalize(displayField, state.peakThresholdRatio);
       const img = createImageDataFromGray(gray, patchSize, patchSize);
@@ -619,7 +616,6 @@
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = patchSize;
       tempCanvas.height = patchSize;
-
       const tctx = tempCanvas.getContext("2d", { willReadFrequently: true });
       tctx.putImageData(img, 0, 0);
 
@@ -636,158 +632,4 @@
         1
       );
 
-      if (acorrModeLabel) {
-        acorrModeLabel.textContent =
-          state.displayMode === "laplacian"
-            ? "Laplacian of Autocorrelation"
-            : "Autocorrelation";
-      }
-
-      patchSizeLabel.textContent = `Patch: ${patchSize} px`;
-      patchSizeInline.textContent = patchSize;
-    }
-
-    function updateAutocorrPreviewPosition(clientX, clientY) {
-      const pad = 18;
-      let left = clientX + pad;
-      let top = clientY + pad;
-
-      const rect = acorrPreview.getBoundingClientRect();
-
-      if (left + rect.width > window.innerWidth - 8) {
-        left = clientX - rect.width - pad;
-      }
-      if (top + rect.height > window.innerHeight - 8) {
-        top = clientY - rect.height - pad;
-      }
-
-      acorrPreview.style.left = `${left}px`;
-      acorrPreview.style.top = `${top}px`;
-    }
-
-    function refreshAutocorrStateUI() {
-      autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
-      acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
-
-      if (acorrModeLabel) {
-        acorrModeLabel.textContent =
-          state.displayMode === "laplacian"
-            ? "Laplacian of Autocorrelation"
-            : "Autocorrelation";
-      }
-    }
-
-    // =========================================================
-    // EVENTS
-    // =========================================================
-    btnGenerate.addEventListener("click", () => {
-      renderGeneratedTexture();
-    });
-
-    btnProjection.addEventListener("click", () => {
-      state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
-      applyCurrentProjection();
-
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    btnAutocorr.addEventListener("click", () => {
-      state.autocorrEnabled = !state.autocorrEnabled;
-      refreshAutocorrStateUI();
-
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    contrastSlider.addEventListener("input", () => {
-      state.peakThresholdRatio = parseFloat(contrastSlider.value);
-      contrastValue.textContent = `${state.peakThresholdRatio.toFixed(2)}·max`;
-
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    canvas.addEventListener("mousemove", (event) => {
-      const pos = getCanvasMousePos(event, canvas);
-      state.mouseX = pos.x;
-      state.mouseY = pos.y;
-
-      if (state.autocorrEnabled) {
-        updateAutocorrPreviewPosition(event.clientX, event.clientY);
-        renderAutocorrelationAt(pos.x, pos.y);
-      }
-    });
-
-    canvas.addEventListener("mouseenter", (event) => {
-      canvasHovered = true;
-
-      if (state.autocorrEnabled) {
-        acorrPreview.style.display = "block";
-        updateAutocorrPreviewPosition(event.clientX, event.clientY);
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    canvas.addEventListener("mouseleave", () => {
-      canvasHovered = false;
-      acorrPreview.style.display = "none";
-    });
-
-    window.addEventListener("keydown", (event) => {
-      if (!state.autocorrEnabled || !canvasHovered) return;
-
-      if (event.key === "ArrowRight") {
-        event.preventDefault();
-        updatePeakThreshold(0.01);
-      } else if (event.key === "ArrowLeft") {
-        event.preventDefault();
-        updatePeakThreshold(-0.01);
-      } else if (event.key === "s" || event.key === "S") {
-        event.preventDefault();
-        state.displayMode = state.displayMode === "autocorr" ? "laplacian" : "autocorr";
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    canvas.addEventListener("wheel", (event) => {
-      if (!state.autocorrEnabled) return;
-
-      event.preventDefault();
-
-      const step = event.deltaY < 0 ? 8 : -8;
-      state.patchSize = clamp(state.patchSize + step, 60, 128);
-
-      if (state.patchSize % 2 !== 0) {
-        state.patchSize += event.deltaY < 0 ? 1 : -1;
-        state.patchSize = clamp(state.patchSize, 60, 128);
-      }
-
-      patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-      patchSizeInline.textContent = state.patchSize;
-
-      renderAutocorrelationAt(state.mouseX, state.mouseY);
-    }, { passive: false });
-
-    window.addEventListener("resize", () => {
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      }
-    });
-
-    // =========================================================
-    // INIT
-    // =========================================================
-    contrastSlider.value = String(state.peakThresholdRatio);
-    contrastValue.textContent = `${state.peakThresholdRatio.toFixed(2)}·max`;
-    projectionModeLabel.textContent = state.projectionModes[state.projectionIndex];
-    patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-    patchSizeInline.textContent = state.patchSize;
-
-    refreshAutocorrStateUI();
-    renderGeneratedTexture();
-  });
-})();
+      updateLabels();

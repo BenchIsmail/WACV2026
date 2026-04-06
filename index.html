@@ -142,7 +142,7 @@
     }
 
     #acorr-contrast-value {
-      min-width: 3.2rem;
+      min-width: 4.6rem;
       text-align: right;
     }
 
@@ -466,15 +466,15 @@
     <div class="acorr-preview-inner">
       <div class="acorr-preview-header">
         <span id="acorr-mode-label">Autocorrelation</span>
-        <span id="patch-size-label">Patch: 128 px</span>
+        <span id="patch-size-label">Patch: 60 px</span>
       </div>
 
       <canvas id="acorr-canvas" width="240" height="240"></canvas>
 
       <div class="acorr-controls">
-        <label for="acorr-contrast">Contrast</label>
+        <label for="acorr-contrast">Peak threshold</label>
         <input id="acorr-contrast" type="range" min="0.05" max="1" step="0.01" value="0.25">
-        <span id="acorr-contrast-value">1.5×</span>
+        <span id="acorr-contrast-value">0.25·max</span>
       </div>
     </div>
   </div>
@@ -583,7 +583,6 @@
       </div>
     </section>
 
-    <!-- INTERACTIVE TEST ZONE -->
     <section class="section">
       <div class="container is-max-desktop">
         <h2 class="title is-3 has-text-centered">Interactive Test Zone</h2>
@@ -602,7 +601,7 @@
 
             <button id="btn-toggle-autocorr" class="button is-warning is-rounded">
               <span class="icon"><i class="fas fa-magnifying-glass"></i></span>
-              <span id="acorr-mode-label">Autocorrelation</span>
+              <span>Autocorrelation</span>
             </button>
           </div>
 
@@ -612,7 +611,7 @@
 
           <div class="interactive-status">
             <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
-            <span class="status-pill">Patch: <span id="patch-size-inline">128</span> px</span>
+            <span class="status-pill">Patch: <span id="patch-size-inline">60</span> px</span>
             <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
           </div>
 
@@ -620,7 +619,9 @@
             Click <strong>Texture Generate</strong> to create a new texture. Click <strong>Change Projection</strong> to cycle through
             <strong>Affine</strong>, <strong>Perspective</strong>, and <strong>Cylindrical</strong>.
             Click <strong>Autocorrelation</strong> to enable live local autocorrelation under the mouse.
-            Use the <strong>mouse wheel</strong> over the image to change the patch size.
+            Use the <strong>mouse wheel</strong> over the image to change the patch size (up to 128 px).
+            Use <strong>Left / Right</strong> arrows to change the peak threshold.
+            Press <strong>S</strong> to switch between autocorrelation and its Laplacian.
           </p>
         </div>
       </div>

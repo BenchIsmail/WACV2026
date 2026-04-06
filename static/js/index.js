@@ -70,7 +70,7 @@
       sourceImageData: null,
       displayedImageData: null,
       patchSize: 128,
-      contrast: 3,
+      contrast: 1.5,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
@@ -291,7 +291,7 @@
         w,
         h,
         1,      // dilation size
-        0.02,   // proportion de noir
+        0.1,   // proportion de noir
         90,     // angle shift
         22      // norm shift
       );

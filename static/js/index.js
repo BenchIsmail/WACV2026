@@ -584,58 +584,33 @@
 
     function renderAutocorrelationAt(x, y) {
       if (!state.autocorrEnabled || !state.displayedImageData) return;
-
+    
       const patchSize = state.patchSize;
       const cx = Math.round(x);
       const cy = Math.round(y);
-
+    
       const patch = extractPatchGray(state.displayedImageData, cx, cy, patchSize);
       const ac = computeAutocorrelation2D(patch, patchSize);
-
+    
       const displayField =
         state.displayMode === "laplacian"
           ? computeLaplacian2D(ac, patchSize, patchSize)
           : ac;
-
+    
       const gray = normalizeToUint8(displayField);
       const img = createImageDataFromGray(gray, patchSize, patchSize);
-
+    
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = patchSize;
       tempCanvas.height = patchSize;
-
+    
       const tctx = tempCanvas.getContext("2d");
       tctx.putImageData(img, 0, 0);
-
+    
       acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
       acorrCtx.imageSmoothingEnabled = false;
       acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
-
-      const maxAc = arrayMax(ac);
-      const threshold = state.peakThresholdRatio * maxAc;
-
-      let peakMask = computePeakMask(ac, patchSize, patchSize, threshold);
-      peakMask = dilateBinaryMask(peakMask, patchSize, patchSize, 1);
-
-      const scaleX = acorrCanvas.width / patchSize;
-      const scaleY = acorrCanvas.height / patchSize;
-
-      acorrCtx.save();
-      acorrCtx.fillStyle = "red";
-
-      for (let py = 0; py < patchSize; py++) {
-        for (let px = 0; px < patchSize; px++) {
-          if (peakMask[py * patchSize + px] > 0) {
-            acorrCtx.fillRect(
-              px * scaleX,
-              py * scaleY,
-              Math.max(1, scaleX),
-              Math.max(1, scaleY)
-            );
-          }
-        }
-      }
-
+    
       drawCross(
         acorrCtx,
         acorrCanvas.width / 2,
@@ -644,16 +619,14 @@
         5,
         1
       );
-
-      acorrCtx.restore();
-
+    
       if (acorrModeLabel) {
         acorrModeLabel.textContent =
           state.displayMode === "laplacian"
             ? "Laplacian of Autocorrelation"
             : "Autocorrelation";
       }
-
+    
       patchSizeLabel.textContent = `Patch: ${patchSize} px`;
       patchSizeInline.textContent = patchSize;
     }

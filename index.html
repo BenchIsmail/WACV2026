@@ -4,49 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <meta name="title" content="Autocorrelation-based Fiducial Markers for Traceability - Ismail Bencheikh, Max Dunitz, Marie d’Autume, Enric Meinhardt-Llopis, Marc Pic, Gabriele Facciolo, Pablo Musé">
-  <meta name="description" content="Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, local affinity estimation, and texture rectification on planar and curved surfaces.">
-  <meta name="keywords" content="WACV 2026, fiducial markers, autocorrelation, texture rectification, homography estimation, local affinities, traceability, computer vision">
-  <meta name="author" content="Ismail Bencheikh, Max Dunitz, Marie d’Autume, Enric Meinhardt-Llopis, Marc Pic, Gabriele Facciolo, Pablo Musé">
-  <meta name="robots" content="index, follow">
-  <meta name="language" content="English">
-
-  <meta property="og:type" content="article">
-  <meta property="og:site_name" content="Advanced Track & Trace / Centre Borelli">
-  <meta property="og:title" content="Autocorrelation-based Fiducial Markers for Traceability">
-  <meta property="og:description" content="WACV 2026 project page for autocorrelation-based fiducial markers for traceability and texture rectification.">
-  <meta property="og:url" content="https://benchismail.github.io/WACV2026/">
-  <meta property="og:image" content="https://benchismail.github.io/WACV2026/static/images/teaser.png">
-  <meta property="og:image:width" content="1200">
-  <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Autocorrelation-based Fiducial Markers for Traceability preview">
-
-  <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Autocorrelation-based Fiducial Markers for Traceability">
-  <meta name="twitter:description" content="WACV 2026 project page for autocorrelation-based fiducial markers for traceability and texture rectification.">
-  <meta name="twitter:image" content="https://benchismail.github.io/WACV2026/static/images/teaser.png">
-
-  <meta name="citation_title" content="Autocorrelation-based Fiducial Markers for Traceability">
-  <meta name="citation_author" content="Bencheikh, Ismail">
-  <meta name="citation_author" content="Dunitz, Max">
-  <meta name="citation_author" content="d’Autume, Marie">
-  <meta name="citation_author" content="Meinhardt-Llopis, Enric">
-  <meta name="citation_author" content="Pic, Marc">
-  <meta name="citation_author" content="Facciolo, Gabriele">
-  <meta name="citation_author" content="Musé, Pablo">
-  <meta name="citation_publication_date" content="2026">
-  <meta name="citation_conference_title" content="IEEE/CVF Winter Conference on Applications of Computer Vision (WACV) 2026">
-  <meta name="citation_pdf_url" content="https://benchismail.github.io/WACV2026/static/pdfs/WACV___Self_Rectifying_Textures-13.pdf">
-
-  <meta name="theme-color" content="#2563eb">
-  <meta name="msapplication-TileColor" content="#2563eb">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preconnect" href="https://ajax.googleapis.com">
-
   <title>Autocorrelation-based Fiducial Markers for Traceability | WACV 2026</title>
 
   <link rel="icon" type="image/x-icon" href="/WACV2026/favicon.ico?v=3">
@@ -56,15 +13,11 @@
   <link rel="stylesheet" href="static/css/index.css">
 
   <link rel="preload" href="static/css/bulma-carousel.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <link rel="preload" href="static/css/bulma-slider.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
   <link rel="preload" href="static/css/fontawesome.all.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <link rel="preload" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css" as="style" onload="this.onload=null;this.rel='stylesheet'">
 
   <noscript>
     <link rel="stylesheet" href="static/css/bulma-carousel.min.css">
-    <link rel="stylesheet" href="static/css/bulma-slider.min.css">
     <link rel="stylesheet" href="static/css/fontawesome.all.min.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/jpswalsh/academicons@1/css/academicons.min.css">
   </noscript>
 
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -79,6 +32,7 @@
       background: #f8fafc;
       overflow-x: hidden;
       font-family: 'Inter', sans-serif;
+      color: #0f172a;
     }
 
     .hero,
@@ -90,11 +44,30 @@
       z-index: 1;
     }
 
+    .scroll-to-top {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      z-index: 1000;
+      border: none;
+      width: 48px;
+      height: 48px;
+      border-radius: 999px;
+      background: #111827;
+      color: white;
+      cursor: pointer;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+    }
+
+    .scroll-to-top:hover {
+      background: #1f2937;
+    }
+
     #acorr-preview {
       position: fixed;
       display: none;
-      min-width: 280px;
-      max-width: 300px;
+      min-width: 290px;
+      max-width: 320px;
       background: rgba(15, 23, 42, 0.97);
       color: white;
       border-radius: 14px;
@@ -142,7 +115,7 @@
     }
 
     #acorr-contrast-value {
-      min-width: 4.6rem;
+      min-width: 3.8rem;
       text-align: right;
     }
 
@@ -173,21 +146,6 @@
       max-width: 320px;
     }
 
-    .custom-teaser-img,
-    .custom-section-img {
-      display: block;
-      width: 100%;
-      height: auto;
-      max-width: 80%;
-      margin-left: auto;
-      margin-right: auto;
-    }
-
-    .custom-caption {
-      margin-top: 0.5rem;
-      font-size: 0.95rem;
-    }
-
     .publication-title {
       word-break: break-word;
     }
@@ -197,34 +155,6 @@
       flex-wrap: wrap;
       justify-content: center;
       gap: 0.75rem;
-    }
-
-    .publication-links .link-block {
-      margin: 0;
-    }
-
-    .poster-embed-desktop {
-      display: block;
-    }
-
-    .poster-mobile-preview {
-      display: none;
-    }
-
-    .poster-preview-img {
-      width: 100%;
-      max-width: 900px;
-      height: auto;
-      border-radius: 12px;
-      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
-    }
-
-    .poster-actions {
-      margin-top: 1rem;
-    }
-
-    .poster-actions .button {
-      margin: 0.35rem;
     }
 
     .interactive-box {
@@ -241,6 +171,23 @@
       gap: 0.75rem;
       justify-content: center;
       margin-bottom: 1rem;
+    }
+
+    .interactive-canvas-wrap {
+      display: flex;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+
+    #interactive-canvas {
+      width: min(100%, 900px);
+      aspect-ratio: 1 / 1;
+      border-radius: 14px;
+      background: white;
+      border: 1px solid rgba(15, 23, 42, 0.12);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+      cursor: crosshair;
+      display: block;
     }
 
     .interactive-status {
@@ -261,27 +208,67 @@
       font-weight: 600;
     }
 
-    .interactive-canvas-wrap {
-      display: flex;
-      justify-content: center;
-      margin-top: 1rem;
-    }
-
-    #interactive-canvas {
-      width: min(100%, 900px);
-      aspect-ratio: 1 / 1;
-      border-radius: 14px;
-      background: white;
-      border: 1px solid rgba(15, 23, 42, 0.12);
-      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
-      cursor: crosshair;
-    }
-
     .interactive-help {
       margin-top: 1rem;
       color: #475569;
       font-size: 0.95rem;
       text-align: center;
+      line-height: 1.6;
+    }
+
+    .control-panels {
+      margin-top: 1.25rem;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .control-card {
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: #fcfdff;
+      border-radius: 16px;
+      padding: 1rem;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+    }
+
+    .control-card h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 0.85rem;
+      color: #0f172a;
+    }
+
+    .control-grid {
+      display: grid;
+      gap: 0.85rem;
+    }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 0.65rem;
+      align-items: center;
+      font-size: 0.92rem;
+    }
+
+    .control-row input[type="range"] {
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+
+    .control-value {
+      color: #1d4ed8;
+      font-weight: 700;
+      min-width: 3.2rem;
+      text-align: right;
+    }
+
+    .projection-panel {
+      display: none;
+    }
+
+    .projection-panel.is-active {
+      display: block;
     }
 
     .bibtex-header {
@@ -306,24 +293,9 @@
       background: #1f2937;
     }
 
-    @media screen and (max-width: 1024px) {
-      .hero-top-logos {
-        height: 95px;
-      }
-
-      .hero-top-logos .logo-left {
-        height: 95px;
-        max-width: 150px;
-      }
-
-      .hero-top-logos .logo-right {
-        height: 65px;
-        max-width: 250px;
-      }
-
-      .custom-teaser-img,
-      .custom-section-img {
-        max-width: 90%;
+    @media screen and (max-width: 900px) {
+      .control-panels {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -359,66 +331,9 @@
         line-height: 1.15;
       }
 
-      .publication-authors {
-        font-size: 1.15rem !important;
-        line-height: 1.5;
-      }
-
-      .publication-links {
-        gap: 0.6rem;
-      }
-
-      .publication-links .button {
-        width: 100%;
-        justify-content: center;
-      }
-
-      .custom-teaser-img,
-      .custom-section-img {
-        max-width: 100%;
-      }
-
-      .custom-caption {
-        font-size: 0.9rem;
-      }
-
-      iframe {
-        min-height: 320px;
-      }
-
-      .poster-embed-desktop {
-        display: none;
-      }
-
-      .poster-mobile-preview {
-        display: block;
-      }
-
       #acorr-canvas {
         width: 220px;
         height: 220px;
-      }
-    }
-
-    @media screen and (max-width: 480px) {
-      .publication-title {
-        font-size: 1.8rem !important;
-      }
-
-      .publication-authors {
-        font-size: 1rem !important;
-      }
-
-      .hero-top-logos .logo-left {
-        max-height: 60px;
-      }
-
-      .hero-top-logos .logo-right {
-        max-height: 48px;
-      }
-
-      iframe {
-        min-height: 260px;
       }
     }
   </style>
@@ -426,39 +341,7 @@
   <script defer src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
   <script defer src="static/js/fontawesome.all.min.js"></script>
   <script defer src="static/js/bulma-carousel.min.js"></script>
-  <script defer src="static/js/bulma-slider.min.js"></script>
   <script defer src="static/js/index.js"></script>
-
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "ScholarlyArticle",
-    "headline": "Autocorrelation-based Fiducial Markers for Traceability",
-    "description": "Project page for our WACV 2026 paper on autocorrelation-based fiducial markers for traceability, local affinity estimation, and texture rectification on planar and curved surfaces.",
-    "author": [
-      { "@type": "Person", "name": "Ismail Bencheikh" },
-      { "@type": "Person", "name": "Max Dunitz" },
-      { "@type": "Person", "name": "Marie d’Autume" },
-      { "@type": "Person", "name": "Enric Meinhardt-Llopis" },
-      { "@type": "Person", "name": "Marc Pic" },
-      { "@type": "Person", "name": "Gabriele Facciolo" },
-      { "@type": "Person", "name": "Pablo Musé" }
-    ],
-    "datePublished": "2026-01-01",
-    "publisher": {
-      "@type": "Organization",
-      "name": "WACV 2026"
-    },
-    "url": "https://benchismail.github.io/WACV2026/",
-    "image": "https://benchismail.github.io/WACV2026/static/images/teaser.png",
-    "keywords": ["autocorrelation", "fiducial markers", "traceability", "texture rectification", "computer vision"],
-    "isAccessibleForFree": true,
-    "mainEntity": {
-      "@type": "WebPage",
-      "@id": "https://benchismail.github.io/WACV2026/"
-    }
-  }
-  </script>
 </head>
 
 <body>
@@ -472,9 +355,9 @@
       <canvas id="acorr-canvas" width="240" height="240"></canvas>
 
       <div class="acorr-controls">
-        <label for="acorr-contrast">Peak threshold</label>
-        <input id="acorr-contrast" type="range" min="0.05" max="1" step="0.01" value="0.25">
-        <span id="acorr-contrast-value">0.25·max</span>
+        <label for="acorr-contrast">Contrast</label>
+        <input id="acorr-contrast" type="range" min="0.4" max="4" step="0.1" value="1.5">
+        <span id="acorr-contrast-value">1.5×</span>
       </div>
     </div>
   </div>
@@ -484,7 +367,6 @@
   </button>
 
   <main id="main-content">
-
     <section class="hero">
       <div class="hero-body">
         <div class="container is-max-desktop">
@@ -492,48 +374,16 @@
             <div class="column has-text-centered">
 
               <div class="hero-top-logos">
-                <img src="static/images/LOGO-ATT-NORMAL-2.png"
-                     alt="Advanced Track and Trace logo"
-                     class="logo-left">
-                <img src="static/images/LOGOS_ENS-PARIS-SACLAY_UPSAY_2.png"
-                     alt="ENS Paris-Saclay and Université Paris-Saclay logos"
-                     class="logo-right">
+                <img src="static/images/LOGO-ATT-NORMAL-2.png" alt="Advanced Track and Trace logo" class="logo-left">
+                <img src="static/images/LOGOS_ENS-PARIS-SACLAY_UPSAY_2.png" alt="ENS Paris-Saclay and Université Paris-Saclay logos" class="logo-right">
               </div>
 
               <h1 class="title is-1 publication-title">
                 Autocorrelation-based Fiducial Markers for Traceability
               </h1>
 
-              <div class="is-size-5 publication-authors">
-                <span class="author-block">
-                  <a href="mailto:i.bencheikh@att-fr.com">Ismail Bencheikh</a>,
-                </span>
-                <span class="author-block">
-                  <a href="mailto:m.dunitz@att-fr.com">Max Dunitz</a>,
-                </span>
-                <span class="author-block">
-                  <a href="#" target="_blank" rel="noopener noreferrer">Marie d’Autume</a>,
-                </span>
-                <span class="author-block">
-                  <a href="#" target="_blank" rel="noopener noreferrer">Enric Meinhardt-Llopis</a>,
-                </span>
-                <span class="author-block">
-                  <a href="#" target="_blank" rel="noopener noreferrer">Marc Pic</a>,
-                </span>
-                <span class="author-block">
-                  <a href="#" target="_blank" rel="noopener noreferrer">Gabriele Facciolo</a>,
-                </span>
-                <span class="author-block">
-                  <a href="#" target="_blank" rel="noopener noreferrer">Pablo Musé</a>
-                </span>
-              </div>
-
-              <div class="is-size-5 publication-authors" style="margin-top: 0.9rem;">
-                <span class="author-block">
-                  Advanced Track &amp; Trace, Centre Borelli, Université Paris-Saclay, Université Paris Cité, ENS Paris-Saclay, CNRS, SSA, INSERM
-                  <br>
-                  <strong>Accepted at WACV 2026</strong>
-                </span>
+              <div class="is-size-5" style="margin-top: 0.9rem;">
+                <strong>Accepted at WACV 2026</strong>
               </div>
 
               <div class="publication-links" style="margin-top: 1.5rem;">
@@ -572,17 +422,6 @@
       </div>
     </section>
 
-    <section class="hero teaser">
-      <div class="container is-max-desktop">
-        <div class="hero-body">
-          <img src="static/images/teaser.png" alt="Teaser image for the paper" loading="lazy" class="custom-teaser-img">
-          <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
-            We introduce autocorrelation-based fiducial textures for robust traceability, with local affinity estimation and texture rectification on planar and curved surfaces.
-          </h2>
-        </div>
-      </div>
-    </section>
-
     <section class="section">
       <div class="container is-max-desktop">
         <h2 class="title is-3 has-text-centered">Interactive Test Zone</h2>
@@ -591,7 +430,7 @@
           <div class="interactive-toolbar">
             <button id="btn-generate-texture" class="button is-dark is-rounded">
               <span class="icon"><i class="fas fa-wand-magic-sparkles"></i></span>
-              <span>Texture Generate</span>
+              <span>Generate Texture</span>
             </button>
 
             <button id="btn-change-projection" class="button is-link is-rounded">
@@ -602,6 +441,11 @@
             <button id="btn-toggle-autocorr" class="button is-warning is-rounded">
               <span class="icon"><i class="fas fa-magnifying-glass"></i></span>
               <span>Autocorrelation</span>
+            </button>
+
+            <button id="btn-reset-params" class="button is-light is-rounded">
+              <span class="icon"><i class="fas fa-rotate-left"></i></span>
+              <span>Reset Params</span>
             </button>
           </div>
 
@@ -616,220 +460,141 @@
           </div>
 
           <p class="interactive-help">
-            Click <strong>Texture Generate</strong> to create a new texture. Click <strong>Change Projection</strong> to cycle through
-            <strong>Affine</strong>, <strong>Perspective</strong>, and <strong>Cylindrical</strong>.
-            Click <strong>Autocorrelation</strong> to enable live local autocorrelation under the mouse.
-            Use the <strong>mouse wheel</strong> over the image to change the patch size (up to 128 px).
-            Use <strong>Left / Right</strong> arrows to change the peak threshold.
-            Press <strong>S</strong> to switch between autocorrelation and its Laplacian.
+            Active l’autocorrélation avec le bouton dédié. Déplace la souris sur l’image pour voir la zone locale.
+            Utilise la <strong>molette</strong> pour changer la taille du patch (60 au départ, max 128).
+            Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
+            Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
           </p>
-        </div>
-      </div>
-    </section>
 
-    <section class="section hero is-light">
-      <div class="container is-max-desktop">
-        <div class="columns is-centered has-text-centered">
-          <div class="column is-four-fifths">
-            <h2 class="title is-3">Abstract</h2>
+          <div class="control-panels">
+            <div class="control-card">
+              <h3>Texture Parameters</h3>
+              <div class="control-grid">
+                <div class="control-row">
+                  <span>Black occupancy</span>
+                  <span id="val-occupancy" class="control-value">0.16</span>
+                  <input id="tex-occupancy" type="range" min="0.05" max="0.40" step="0.01" value="0.16">
+                </div>
 
-            <div class="has-text-centered" style="margin-bottom: 1.5rem;">
-              <figure>
-                <img src="static/images/ExampleFiducialMarkers.png"
-                     alt="Classical fiducial markers"
-                     class="custom-section-img">
-                <figcaption class="custom-caption">
-                  Classical fiducial markers
-                </figcaption>
-              </figure>
+                <div class="control-row">
+                  <span>Dilation radius</span>
+                  <span id="val-dilation" class="control-value">1</span>
+                  <input id="tex-dilation" type="range" min="0" max="3" step="1" value="1">
+                </div>
+
+                <div class="control-row">
+                  <span>Shift angle</span>
+                  <span id="val-angle" class="control-value">90°</span>
+                  <input id="tex-angle" type="range" min="-180" max="180" step="1" value="90">
+                </div>
+
+                <div class="control-row">
+                  <span>Shift norm</span>
+                  <span id="val-shift" class="control-value">22</span>
+                  <input id="tex-shift" type="range" min="6" max="60" step="1" value="22">
+                </div>
+
+                <div class="control-row">
+                  <span>Patch size</span>
+                  <span id="val-patch-slider" class="control-value">60 px</span>
+                  <input id="patch-size-control" type="range" min="32" max="128" step="2" value="60">
+                </div>
+              </div>
             </div>
 
-            <div class="content has-text-justified">
-              <p>
-                Classical single-image rectification methods usually rely on conspicuous landmarks or printed markers that can be degraded, removed, or visually alter the surface they protect. In this work, we propose autocorrelation-based fiducial markers for traceability. Our approach relies on textures whose local normalized autocorrelation exhibits a characteristic hexagonal structure, allowing the recovery of local geometric information from a single image. From these local observations, we estimate affine distortions and aggregate them to infer a global rectifying transformation. This framework is particularly relevant for traceability applications on packaging and bottles, where surfaces may be planar or curved and where visually intrusive codes are undesirable. The proposed method opens the way to robust and discreet identification patterns that remain compatible with challenging real imaging conditions.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+            <div class="control-card">
+              <h3>Projection Parameters</h3>
 
-    <section class="section">
-      <div class="container is-max-desktop">
-        <h2 class="title is-3 has-text-centered">Motivation</h2>
+              <div id="panel-affine" class="projection-panel is-active">
+                <div class="control-grid">
+                  <div class="control-row">
+                    <span>Rotation Z</span>
+                    <span id="val-a-rot" class="control-value">-18°</span>
+                    <input id="param-a-rot" type="range" min="-60" max="60" step="1" value="-18">
+                  </div>
 
-        <div class="has-text-centered" style="margin-bottom: 1.5rem;">
-          <figure>
-            <img src="static/images/depositphotos.jpg"
-                 alt="Traceability problem on wine bottles"
-                 class="custom-section-img">
-            <figcaption class="custom-caption">
-              Traditional visible identifiers can be degraded or removed, especially on high-value products such as wine bottles.
-            </figcaption>
-          </figure>
-        </div>
+                  <div class="control-row">
+                    <span>Scale X</span>
+                    <span id="val-a-scalex" class="control-value">0.90</span>
+                    <input id="param-a-scalex" type="range" min="0.60" max="1.40" step="0.01" value="0.90">
+                  </div>
 
-        <div class="content has-text-justified">
-          <p>
-            In traceability applications, traditional visible identifiers such as QR codes or barcodes can be intentionally degraded, removed, or replaced. This issue is especially critical for high-value products such as wine bottles, where resale practices may rely on tampering with visible identifiers. Our goal is to design discreet fiducial textures that remain informative for geometric recovery while being harder to tear off or visually alter.
-          </p>
-          <p>
-            The problem becomes even more challenging on curved objects such as bottles, where perspective effects and surface curvature deform the observed texture. This motivates a method that estimates local geometric distortions from autocorrelation peaks and uses them to recover a meaningful global rectification.
-          </p>
-        </div>
-      </div>
-    </section>
+                  <div class="control-row">
+                    <span>Scale Y</span>
+                    <span id="val-a-scaley" class="control-value">0.95</span>
+                    <input id="param-a-scaley" type="range" min="0.60" max="1.40" step="0.01" value="0.95">
+                  </div>
 
-    <section class="section is-light">
-      <div class="container is-max-desktop">
-        <h2 class="title is-3 has-text-centered">Method Overview</h2>
+                  <div class="control-row">
+                    <span>Shear X</span>
+                    <span id="val-a-shearx" class="control-value">0.38</span>
+                    <input id="param-a-shearx" type="range" min="-0.70" max="0.70" step="0.01" value="0.38">
+                  </div>
 
-        <div class="content has-text-justified">
-          <p>
-            Our method starts from specially designed textures whose autocorrelation reveals a fundamental hexagonal arrangement of peaks. These peaks encode local geometric information and make it possible to estimate local affine distortions from image patches. We then combine these local estimates across the image to recover a global geometric model and rectify the observed texture.
-          </p>
-          <p>
-            This approach is particularly useful when explicit landmarks are unavailable or undesirable, and when the texture may be observed under strong deformation, including non-planar settings.
-          </p>
-        </div>
-
-        <div class="has-text-centered" style="margin-top: 2rem;">
-          <iframe
-            src="static/pdfs/acorr123.pdf"
-            width="100%"
-            height="1200"
-            title="Method Overview PDF"
-            loading="lazy"
-            style="border: none; border-radius: 12px; background: white;">
-          </iframe>
-        </div>
-
-        <div class="has-text-centered" style="margin-top: 1rem;">
-          <a href="static/pdfs/acorr123.pdf"
-             target="_blank"
-             rel="noopener noreferrer"
-             class="button is-dark is-rounded">
-            <span class="icon"><i class="fas fa-file-pdf"></i></span>
-            <span>Open Method PDF</span>
-          </a>
-        </div>
-      </div>
-    </section>
-
-    <section class="hero is-small">
-      <div class="hero-body">
-        <div class="container">
-          <h2 class="title is-3 has-text-centered">Results</h2>
-          <div id="results-carousel" class="carousel results-carousel">
-
-            <div class="item">
-              <img src="static/images/occ_33.001.png" alt="Occlusion robust" loading="lazy">
-              <h2 class="subtitle has-text-centered">
-                Self-rectifying textures VS Classic fiducial markers : Occlusion.
-              </h2>
-            </div>
-
-            <div class="item">
-              <img src="static/images/folds.png" alt="Texture and autocorrelation" loading="lazy">
-              <h2 class="subtitle has-text-centered">
-                Example of a generated fiducial texture and its characteristic autocorrelation structure.
-              </h2>
-            </div>
-
-            <div class="item">
-              <img src="static/images/homogr.001.png" alt="Local affinity estimation" loading="lazy">
-              <h2 class="subtitle has-text-centered">
-                Local estimation of geometric distortions from autocorrelation peak configurations.
-              </h2>
-            </div>
-
-            <div class="item">
-              <img src="static/images/result3.png" alt="Rectification result" loading="lazy">
-              <h2 class="subtitle has-text-centered">
-                Rectification result from aggregated local geometric observations.
-              </h2>
-            </div>
-
-            <div class="item">
-              <img src="static/images/result_cylindre.png" alt="Curved surface example" loading="lazy">
-              <h2 class="subtitle has-text-centered">
-                Illustration on curved surfaces, motivating robust traceability on bottles and packaging.
-              </h2>
-            </div>
-
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section class="hero is-small is-light">
-      <div class="hero-body">
-        <div class="container">
-          <h2 class="title is-3">Video Presentation</h2>
-          <div class="columns is-centered has-text-centered">
-            <div class="column is-four-fifths">
-
-              <div class="publication-video">
-                <iframe
-                  src="https://www.youtube-nocookie.com/embed/WxRhdRdvaAY?start=116"
-                  title="WACV 2026 Video Presentation"
-                  frameborder="0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                  referrerpolicy="strict-origin-when-cross-origin"
-                  allowfullscreen>
-                </iframe>
+                  <div class="control-row">
+                    <span>Shear Y</span>
+                    <span id="val-a-sheary" class="control-value">-0.18</span>
+                    <input id="param-a-sheary" type="range" min="-0.70" max="0.70" step="0.01" value="-0.18">
+                  </div>
+                </div>
               </div>
 
-              <p style="margin-top: 1rem;">
-                If the embedded player does not load, open the video directly here:
-                <a href="https://www.youtube.com/watch?v=WxRhdRdvaAY&t=116s" target="_blank">YouTube link</a>.
-              </p>
+              <div id="panel-perspective" class="projection-panel">
+                <div class="control-grid">
+                  <div class="control-row">
+                    <span>Tilt X</span>
+                    <span id="val-p-tiltx" class="control-value">0.55</span>
+                    <input id="param-p-tiltx" type="range" min="-0.90" max="0.90" step="0.01" value="0.55">
+                  </div>
 
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
+                  <div class="control-row">
+                    <span>Tilt Y</span>
+                    <span id="val-p-tilty" class="control-value">-0.15</span>
+                    <input id="param-p-tilty" type="range" min="-0.90" max="0.90" step="0.01" value="-0.15">
+                  </div>
 
-    <section class="hero is-small">
-      <div class="hero-body">
-        <div class="container is-max-desktop">
-          <h2 class="title is-3 has-text-centered">Poster</h2>
+                  <div class="control-row">
+                    <span>Focal scale</span>
+                    <span id="val-p-focal" class="control-value">1.25</span>
+                    <input id="param-p-focal" type="range" min="0.70" max="2.20" step="0.01" value="1.25">
+                  </div>
 
-          <div class="poster-embed-desktop">
-            <iframe
-              src="static/pdfs/Poster___WACV-22.pdf"
-              width="100%"
-              height="550"
-              title="Poster PDF"
-              loading="lazy"
-              style="border: none; border-radius: 12px;">
-            </iframe>
-          </div>
+                  <div class="control-row">
+                    <span>Rotation Z</span>
+                    <span id="val-p-zrot" class="control-value">0°</span>
+                    <input id="param-p-zrot" type="range" min="-60" max="60" step="1" value="0">
+                  </div>
+                </div>
+              </div>
 
-          <div class="poster-mobile-preview has-text-centered">
-            <img
-              src="static/images/Poster___WACV-22_page-0001.jpg"
-              alt="Poster preview"
-              class="poster-preview-img"
-              loading="lazy">
+              <div id="panel-cylindrical" class="projection-panel">
+                <div class="control-grid">
+                  <div class="control-row">
+                    <span>Curvature</span>
+                    <span id="val-c-curv" class="control-value">1.05</span>
+                    <input id="param-c-curv" type="range" min="0.05" max="1.50" step="0.01" value="1.05">
+                  </div>
 
-            <div class="poster-actions">
-              <a href="static/pdfs/Poster___WACV-22.pdf"
-                 target="_blank"
-                 rel="noopener noreferrer"
-                 class="button is-dark is-rounded">
-                <span class="icon"><i class="fas fa-file-pdf"></i></span>
-                <span>Open Poster PDF</span>
-              </a>
+                  <div class="control-row">
+                    <span>Perspective drop</span>
+                    <span id="val-c-drop" class="control-value">0.35</span>
+                    <input id="param-c-drop" type="range" min="0.00" max="1.20" step="0.01" value="0.35">
+                  </div>
 
-              <a href="static/images/Poster___WACV-22_page-0001.jpg"
-                 target="_blank"
-                 rel="noopener noreferrer"
-                 class="button is-light is-rounded">
-                <span class="icon"><i class="fas fa-image"></i></span>
-                <span>Open Poster Image</span>
-              </a>
+                  <div class="control-row">
+                    <span>Rotation Z</span>
+                    <span id="val-c-zrot" class="control-value">0°</span>
+                    <input id="param-c-zrot" type="range" min="-60" max="60" step="1" value="0">
+                  </div>
+
+                  <div class="control-row">
+                    <span>Vertical stretch</span>
+                    <span id="val-c-vstretch" class="control-value">1.00</span>
+                    <input id="param-c-vstretch" type="range" min="0.60" max="1.50" step="0.01" value="1.00">
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         </div>
@@ -855,36 +620,15 @@
       </div>
     </section>
 
-    <section class="section is-light">
-      <div class="container is-max-desktop">
-        <h2 class="title is-3 has-text-centered">Contact</h2>
+    <footer class="footer">
+      <div class="container">
         <div class="content has-text-centered">
           <p>
-            For questions regarding this work, please contact
-            <a href="mailto:i.bencheikh@att-fr.com">Ismail Bencheikh</a>
-            and
-            <a href="mailto:m.dunitz@att-fr.com">Max Dunitz</a>.
+            Interactive demo page for the WACV 2026 project.
           </p>
         </div>
       </div>
-    </section>
-
-    <footer class="footer">
-      <div class="container">
-        <div class="columns is-centered">
-          <div class="column is-8">
-            <div class="content has-text-centered">
-              <p>
-                This page was built using the
-                <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a>,
-                adapted from the <a href="https://nerfies.github.io" target="_blank">Nerfies</a> project page.
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
     </footer>
-
   </main>
 </body>
 </html>

@@ -157,7 +157,8 @@
       gap: 0.75rem;
     }
 
-    .interactive-box {
+    .interactive-box,
+    .article-box {
       background: white;
       border-radius: 18px;
       box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
@@ -271,6 +272,38 @@
       display: block;
     }
 
+    .article-box .content h3 {
+      margin-top: 1.25rem;
+      color: #0f172a;
+    }
+
+    .article-box .content p,
+    .article-box .content li {
+      color: #334155;
+      line-height: 1.8;
+    }
+
+    .article-highlight-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .article-highlight-card {
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      background: #fcfdff;
+      border-radius: 16px;
+      padding: 1rem;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+    }
+
+    .article-highlight-card h4 {
+      margin-bottom: 0.5rem;
+      font-weight: 700;
+      color: #0f172a;
+    }
+
     .bibtex-header {
       display: flex;
       align-items: center;
@@ -294,7 +327,8 @@
     }
 
     @media screen and (max-width: 900px) {
-      .control-panels {
+      .control-panels,
+      .article-highlight-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -367,6 +401,7 @@
   </button>
 
   <main id="main-content">
+
     <section class="hero">
       <div class="hero-body">
         <div class="container is-max-desktop">
@@ -601,6 +636,99 @@
       </div>
     </section>
 
+    <!-- ================= ARTICLE CONTENT ================= -->
+    <section class="section">
+      <div class="container is-max-desktop">
+        <h2 class="title is-3 has-text-centered">Article Content</h2>
+
+        <div class="article-box">
+          <div class="content">
+            <h3>Abstract</h3>
+            <p>
+              We introduce autocorrelation-based fiducial markers designed for robust traceability under geometric distortions,
+              partial occlusions, and non-ideal imaging conditions. Instead of relying on sparse landmarks or visually explicit
+              codes, our approach uses distributed stealth textures whose local normalized autocorrelation exhibits a stable
+              hexagonal structure. This repeated local organization enables the estimation of local affine distortions from a
+              single image and supports rectification without requiring conventional corner or keypoint detection.
+            </p>
+
+            <h3>Context</h3>
+            <p>
+              Product traceability and authentication often require visual identifiers that remain readable in real-world
+              conditions. In many industrial scenarios, markers are printed on flexible, curved, or partially degraded surfaces,
+              which makes standard fiducials more fragile. This motivates the use of textures that spread the information over
+              the whole surface rather than concentrating it at a few critical landmarks.
+            </p>
+
+            <h3>Motivation</h3>
+            <p>
+              Classical markers can fail when corners are hidden, damaged, poorly illuminated, or blurred by perspective and
+              surface deformation. Our goal is to design a texture-based marker that remains informative locally, so that even
+              a partial observation still contains enough geometric structure to estimate deformation. This is especially useful
+              for packaging, labels, and traceability surfaces where stealth, redundancy, and robustness are all desirable.
+            </p>
+
+            <h3>Method Overview</h3>
+            <p>
+              The core idea is to exploit the characteristic peak configuration of the local autocorrelation of the texture.
+              In the undeformed case, the autocorrelation presents a hexagonal pattern with six satellite peaks. Under imaging
+              deformation, the local structure is transformed, and the observed peak geometry provides direct information about
+              the local affine map. By collecting local differential estimates over the image, we recover a global rectifying
+              transformation up to translation.
+            </p>
+
+            <div class="article-highlight-grid">
+              <div class="article-highlight-card">
+                <h4>Planar case</h4>
+                <p>
+                  On planar supports, the local affine maps are consistent with a single global homography. The method estimates
+                  local differentials and aggregates them to infer the global geometric correction from one image.
+                </p>
+              </div>
+
+              <div class="article-highlight-card">
+                <h4>Curved case</h4>
+                <p>
+                  On cylindrical surfaces, the deformation is no longer globally projective. However, the local affine
+                  approximation still remains meaningful and provides useful differential information for rectification.
+                </p>
+              </div>
+            </div>
+
+            <h3>Why Autocorrelation?</h3>
+            <p>
+              Autocorrelation is naturally adapted to repeated structures and is less dependent on explicit semantic features.
+              It captures the geometric organization of the texture rather than isolated points, which makes the approach more
+              tolerant to local defects, clutter, and partial visibility.
+            </p>
+
+            <h3>Interactive Demo Purpose</h3>
+            <p>
+              The interactive section above illustrates the main intuition behind the paper. By modifying the generated texture,
+              the patch size, and the projection model, one can observe how the local autocorrelation evolves and how its peak
+              organization remains informative under affine, perspective, and cylindrical deformations.
+            </p>
+
+            <h3>Results and Contributions</h3>
+            <ul>
+              <li>Landmark-free rectification from local autocorrelation structure.</li>
+              <li>Stealth fiducial textures suitable for distributed traceability.</li>
+              <li>Robustness to occlusion, degradation, and partial visibility.</li>
+              <li>Extension from planar projective settings to curved cylindrical surfaces.</li>
+              <li>Interactive visualization of deformation and local autocorrelation behavior.</li>
+            </ul>
+
+            <h3>Applications</h3>
+            <p>
+              This framework is relevant for product authentication, industrial printing, packaging traceability, anti-tampering
+              systems, and imaging scenarios where identifiers must remain functional despite non-planar support and challenging
+              acquisition conditions.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <section class="section" id="BibTeX">
       <div class="container is-max-desktop content">
         <div class="bibtex-header">
@@ -629,6 +757,7 @@
         </div>
       </div>
     </footer>
+
   </main>
 </body>
 </html>

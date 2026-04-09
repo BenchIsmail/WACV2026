@@ -118,10 +118,10 @@
 
     const DEFAULTS = {
       texture: {
-        occupancy: 0.4,
+        occupancy: 0.40,
         dilation: 0,
         angleShiftDeg: 90,
-        normShift: 30,
+        normShift: 22,
         blurSigma: 1.05
       },
       affine: {
@@ -154,7 +154,7 @@
       sourceImageData: null,
       displayedImageData: null,
       patchSize: 90,
-      previewContrast: 3,
+      previewContrast: 1.5,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
@@ -165,7 +165,7 @@
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
-      previewComputeSize: 90,
+      previewComputeSize: 64,
       autocorrCenterEraseRadius: 5
     };
 

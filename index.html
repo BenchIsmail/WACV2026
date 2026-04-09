@@ -158,7 +158,8 @@
     }
 
     .interactive-box,
-    .article-box {
+    .article-box,
+    .media-box {
       background: white;
       border-radius: 18px;
       box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
@@ -304,6 +305,63 @@
       color: #0f172a;
     }
 
+    .custom-teaser-img,
+    .custom-section-img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-width: 80%;
+      margin-left: auto;
+      margin-right: auto;
+      border-radius: 12px;
+    }
+
+    .custom-caption {
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+      color: #475569;
+    }
+
+    .results-carousel .item img {
+      width: 100%;
+      height: auto;
+      border-radius: 12px;
+      display: block;
+      margin: 0 auto;
+    }
+
+    .publication-video iframe {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border: none;
+      border-radius: 12px;
+      background: #000;
+    }
+
+    .poster-embed-desktop {
+      display: block;
+    }
+
+    .poster-mobile-preview {
+      display: none;
+    }
+
+    .poster-preview-img {
+      width: 100%;
+      max-width: 900px;
+      height: auto;
+      border-radius: 12px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.12);
+    }
+
+    .poster-actions {
+      margin-top: 1rem;
+    }
+
+    .poster-actions .button {
+      margin: 0.35rem;
+    }
+
     .bibtex-header {
       display: flex;
       align-items: center;
@@ -365,9 +423,22 @@
         line-height: 1.15;
       }
 
+      .custom-teaser-img,
+      .custom-section-img {
+        max-width: 100%;
+      }
+
       #acorr-canvas {
         width: 220px;
         height: 220px;
+      }
+
+      .poster-embed-desktop {
+        display: none;
+      }
+
+      .poster-mobile-preview {
+        display: block;
       }
     }
   </style>
@@ -630,6 +701,239 @@
                 </div>
               </div>
 
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= MEDIA CONTENT ADDED AFTER INTERACTIVE ZONE ================= -->
+
+    <section class="hero teaser">
+      <div class="container is-max-desktop">
+        <div class="hero-body">
+          <img src="static/images/teaser.png" alt="Teaser image for the paper" loading="lazy" class="custom-teaser-img">
+          <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+            We introduce autocorrelation-based fiducial textures for robust traceability, with local affinity estimation and texture rectification on planar and curved surfaces.
+          </h2>
+        </div>
+      </div>
+    </section>
+
+    <section class="section hero is-light">
+      <div class="container is-max-desktop">
+        <div class="columns is-centered has-text-centered">
+          <div class="column is-four-fifths">
+            <div class="media-box">
+              <h2 class="title is-3">Abstract</h2>
+
+              <div class="has-text-centered" style="margin-bottom: 1.5rem;">
+                <figure>
+                  <img src="static/images/ExampleFiducialMarkers.png"
+                       alt="Classical fiducial markers"
+                       class="custom-section-img">
+                  <figcaption class="custom-caption">
+                    Classical fiducial markers
+                  </figcaption>
+                </figure>
+              </div>
+
+              <div class="content has-text-justified">
+                <p>
+                  Classical single-image rectification methods usually rely on conspicuous landmarks or printed markers that can be degraded, removed, or visually alter the surface they protect. In this work, we propose autocorrelation-based fiducial markers for traceability. Our approach relies on textures whose local normalized autocorrelation exhibits a characteristic hexagonal structure, allowing the recovery of local geometric information from a single image. From these local observations, we estimate affine distortions and aggregate them to infer a global rectifying transformation. This framework is particularly relevant for traceability applications on packaging and bottles, where surfaces may be planar or curved and where visually intrusive codes are undesirable. The proposed method opens the way to robust and discreet identification patterns that remain compatible with challenging real imaging conditions.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container is-max-desktop">
+        <div class="media-box">
+          <h2 class="title is-3 has-text-centered">Motivation</h2>
+
+          <div class="has-text-centered" style="margin-bottom: 1.5rem;">
+            <figure>
+              <img src="static/images/depositphotos.jpg"
+                   alt="Traceability problem on wine bottles"
+                   class="custom-section-img">
+              <figcaption class="custom-caption">
+                Traditional visible identifiers can be degraded or removed, especially on high-value products such as wine bottles.
+              </figcaption>
+            </figure>
+          </div>
+
+          <div class="content has-text-justified">
+            <p>
+              In traceability applications, traditional visible identifiers such as QR codes or barcodes can be intentionally degraded, removed, or replaced. This issue is especially critical for high-value products such as wine bottles, where resale practices may rely on tampering with visible identifiers. Our goal is to design discreet fiducial textures that remain informative for geometric recovery while being harder to tear off or visually alter.
+            </p>
+            <p>
+              The problem becomes even more challenging on curved objects such as bottles, where perspective effects and surface curvature deform the observed texture. This motivates a method that estimates local geometric distortions from autocorrelation peaks and uses them to recover a meaningful global rectification.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section is-light">
+      <div class="container is-max-desktop">
+        <div class="media-box">
+          <h2 class="title is-3 has-text-centered">Method Overview</h2>
+
+          <div class="content has-text-justified">
+            <p>
+              Our method starts from specially designed textures whose autocorrelation reveals a fundamental hexagonal arrangement of peaks. These peaks encode local geometric information and make it possible to estimate local affine distortions from image patches. We then combine these local estimates across the image to recover a global geometric model and rectify the observed texture.
+            </p>
+            <p>
+              This approach is particularly useful when explicit landmarks are unavailable or undesirable, and when the texture may be observed under strong deformation, including non-planar settings.
+            </p>
+          </div>
+
+          <div class="has-text-centered" style="margin-top: 2rem;">
+            <iframe
+              src="static/pdfs/acorr123.pdf"
+              width="100%"
+              height="1200"
+              title="Method Overview PDF"
+              loading="lazy"
+              style="border: none; border-radius: 12px; background: white;">
+            </iframe>
+          </div>
+
+          <div class="has-text-centered" style="margin-top: 1rem;">
+            <a href="static/pdfs/acorr123.pdf"
+               target="_blank"
+               rel="noopener noreferrer"
+               class="button is-dark is-rounded">
+              <span class="icon"><i class="fas fa-file-pdf"></i></span>
+              <span>Open Method PDF</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small">
+      <div class="hero-body">
+        <div class="container">
+          <div class="media-box">
+            <h2 class="title is-3 has-text-centered">Results</h2>
+            <div id="results-carousel" class="carousel results-carousel">
+
+              <div class="item">
+                <img src="static/images/occ_33.001.png" alt="Occlusion robust" loading="lazy">
+                <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+                  Self-rectifying textures VS Classic fiducial markers: Occlusion.
+                </h2>
+              </div>
+
+              <div class="item">
+                <img src="static/images/folds.png" alt="Texture and autocorrelation" loading="lazy">
+                <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+                  Example of a generated fiducial texture and its characteristic autocorrelation structure.
+                </h2>
+              </div>
+
+              <div class="item">
+                <img src="static/images/homogr.001.png" alt="Local affinity estimation" loading="lazy">
+                <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+                  Local estimation of geometric distortions from autocorrelation peak configurations.
+                </h2>
+              </div>
+
+              <div class="item">
+                <img src="static/images/result3.png" alt="Rectification result" loading="lazy">
+                <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+                  Rectification result from aggregated local geometric observations.
+                </h2>
+              </div>
+
+              <div class="item">
+                <img src="static/images/result_cylindre.png" alt="Curved surface example" loading="lazy">
+                <h2 class="subtitle has-text-centered" style="margin-top: 1rem;">
+                  Illustration on curved surfaces, motivating robust traceability on bottles and packaging.
+                </h2>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small is-light">
+      <div class="hero-body">
+        <div class="container">
+          <div class="media-box">
+            <h2 class="title is-3">Video Presentation</h2>
+            <div class="columns is-centered has-text-centered">
+              <div class="column is-four-fifths">
+
+                <div class="publication-video">
+                  <iframe
+                    src="https://www.youtube-nocookie.com/embed/WxRhdRdvaAY?start=116"
+                    title="WACV 2026 Video Presentation"
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    referrerpolicy="strict-origin-when-cross-origin"
+                    allowfullscreen>
+                  </iframe>
+                </div>
+
+                <p style="margin-top: 1rem;">
+                  If the embedded player does not load, open the video directly here:
+                  <a href="https://www.youtube.com/watch?v=WxRhdRdvaAY&t=116s" target="_blank" rel="noopener noreferrer">YouTube link</a>.
+                </p>
+
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="hero is-small">
+      <div class="hero-body">
+        <div class="container is-max-desktop">
+          <div class="media-box">
+            <h2 class="title is-3 has-text-centered">Poster</h2>
+
+            <div class="poster-embed-desktop">
+              <iframe
+                src="static/pdfs/Poster___WACV-22.pdf"
+                width="100%"
+                height="550"
+                title="Poster PDF"
+                loading="lazy"
+                style="border: none; border-radius: 12px;">
+              </iframe>
+            </div>
+
+            <div class="poster-mobile-preview has-text-centered">
+              <img
+                src="static/images/Poster___WACV-22_page-0001.jpg"
+                alt="Poster preview"
+                class="poster-preview-img"
+                loading="lazy">
+
+              <div class="poster-actions">
+                <a href="static/pdfs/Poster___WACV-22.pdf"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="button is-dark is-rounded">
+                  <span class="icon"><i class="fas fa-file-pdf"></i></span>
+                  <span>Open Poster PDF</span>
+                </a>
+
+                <a href="static/images/Poster___WACV-22_page-0001.jpg"
+                   target="_blank"
+                   rel="noopener noreferrer"
+                   class="button is-light is-rounded">
+                  <span class="icon"><i class="fas fa-image"></i></span>
+                  <span>Open Poster Image</span>
+                </a>
+              </div>
             </div>
           </div>
         </div>

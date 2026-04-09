@@ -47,11 +47,15 @@
   // =========================================================
   document.addEventListener("DOMContentLoaded", () => {
     const canvas = document.getElementById("interactive-canvas");
+    if (!canvas) return;
+
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
     const acorrPreview = document.getElementById("acorr-preview");
     const acorrCanvas = document.getElementById("acorr-canvas");
-    const acorrCtx = acorrCanvas.getContext("2d", { willReadFrequently: true });
+    const acorrCtx = acorrCanvas
+      ? acorrCanvas.getContext("2d", { willReadFrequently: true })
+      : null;
 
     const btnGenerate = document.getElementById("btn-generate-texture");
     const btnProjection = document.getElementById("btn-change-projection");
@@ -158,7 +162,8 @@
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
-      previewComputeSize: 64
+      previewComputeSize: 64,
+      autocorrCenterEraseRadius: 5
     };
 
     let canvasHovered = false;
@@ -180,7 +185,7 @@
     }
 
     function degToRad(deg) {
-      return deg * Math.PI / 180;
+      return (deg * Math.PI) / 180;
     }
 
     function rotate2D(x, y, angleRad) {
@@ -190,31 +195,6 @@
         x: c * x - s * y,
         y: s * x + c * y
       };
-    }
-
-    function normalizeToUint8(arr) {
-      let min = Infinity;
-      let max = -Infinity;
-
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
-
-      const out = new Uint8ClampedArray(arr.length);
-
-      if (max <= min) {
-        return out;
-      }
-
-      const scale = 255 / (max - min);
-
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = clamp(Math.round((arr[i] - min) * scale), 0, 255);
-      }
-
-      return out;
     }
 
     function canvasToImageData(srcCanvas) {
@@ -259,19 +239,73 @@
       targetCtx.restore();
     }
 
-    function applyDisplayContrast(arr, contrast) {
-      const out = new Float64Array(arr.length);
-      const gamma = 1 / contrast;
+    function zeroCenterDisk(arr, width, height, radius) {
+      const out = new Float64Array(arr);
+      const cx = Math.floor(width / 2);
+      const cy = Math.floor(height / 2);
+      const r2 = radius * radius;
 
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        out[i] = Math.sign(v) * Math.pow(Math.abs(v), gamma);
+      for (let y = Math.max(0, cy - radius); y <= Math.min(height - 1, cy + radius); y++) {
+        for (let x = Math.max(0, cx - radius); x <= Math.min(width - 1, cx + radius); x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          if (dx * dx + dy * dy <= r2) {
+            out[y * width + x] = 0;
+          }
+        }
       }
 
       return out;
     }
 
+    function normalizeFloatMinMax(arr) {
+      let min = Infinity;
+      let max = -Infinity;
+
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
+
+      const out = new Float64Array(arr.length);
+
+      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+        return out;
+      }
+
+      const range = max - min;
+      for (let i = 0; i < arr.length; i++) {
+        out[i] = (arr[i] - min) / range;
+      }
+
+      return out;
+    }
+
+    function applyDisplayContrastMinMax(arr, width, height, contrast, centerEraseRadius) {
+      const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
+      const normalized = normalizeFloatMinMax(noCenter);
+      const out = new Float64Array(normalized.length);
+      const gamma = 1 / Math.max(contrast, 1e-6);
+
+      for (let i = 0; i < normalized.length; i++) {
+        out[i] = Math.pow(clamp(normalized[i], 0, 1), gamma);
+      }
+
+      return out;
+    }
+
+    function float01ToUint8(arr01) {
+      const out = new Uint8ClampedArray(arr01.length);
+      for (let i = 0; i < arr01.length; i++) {
+        out[i] = clamp(Math.round(arr01[i] * 255), 0, 255);
+      }
+      return out;
+    }
+
     function updateAutocorrPreviewPosition(clientX, clientY) {
+      if (!acorrPreview) return;
+
       const pad = 18;
       let left = clientX + pad;
       let top = clientY + pad;
@@ -290,103 +324,114 @@
     }
 
     function refreshAutocorrStateUI() {
-      autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
-      acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
-      acorrModeLabel.textContent =
-        state.displayMode === "laplacian"
-          ? "Laplacian of Autocorrelation"
-          : "Autocorrelation";
-      patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-      patchSizeInline.textContent = state.patchSize;
+      if (autocorrStateLabel) {
+        autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
+      }
+
+      if (acorrPreview) {
+        acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
+      }
+
+      if (acorrModeLabel) {
+        acorrModeLabel.textContent =
+          state.displayMode === "laplacian"
+            ? "Laplacian of Autocorrelation"
+            : "Autocorrelation";
+      }
+
+      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
+      if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
     }
 
     function refreshProjectionPanels() {
       const mode = state.projectionModes[state.projectionIndex];
-      panelAffine.classList.toggle("is-active", mode === "Affine");
-      panelPerspective.classList.toggle("is-active", mode === "Perspective");
-      panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
-      projectionModeLabel.textContent = mode;
+
+      if (panelAffine) panelAffine.classList.toggle("is-active", mode === "Affine");
+      if (panelPerspective) panelPerspective.classList.toggle("is-active", mode === "Perspective");
+      if (panelCylindrical) panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
+      if (projectionModeLabel) projectionModeLabel.textContent = mode;
     }
 
     function refreshControlLabels() {
-      valOccupancy.textContent = state.texture.occupancy.toFixed(2);
-      valDilation.textContent = String(state.texture.dilation);
-      valAngle.textContent = `${state.texture.angleShiftDeg}°`;
-      valShift.textContent = String(state.texture.normShift);
-      valPatchSlider.textContent = `${state.patchSize} px`;
+      if (valOccupancy) valOccupancy.textContent = state.texture.occupancy.toFixed(2);
+      if (valDilation) valDilation.textContent = String(state.texture.dilation);
+      if (valAngle) valAngle.textContent = `${state.texture.angleShiftDeg}°`;
+      if (valShift) valShift.textContent = String(state.texture.normShift);
+      if (valPatchSlider) valPatchSlider.textContent = `${state.patchSize} px`;
 
-      values.aRot.textContent = `${state.affine.rotationDeg}°`;
-      values.aScaleX.textContent = state.affine.scaleX.toFixed(2);
-      values.aScaleY.textContent = state.affine.scaleY.toFixed(2);
-      values.aShearX.textContent = state.affine.shearX.toFixed(2);
-      values.aShearY.textContent = state.affine.shearY.toFixed(2);
+      if (values.aRot) values.aRot.textContent = `${state.affine.rotationDeg}°`;
+      if (values.aScaleX) values.aScaleX.textContent = state.affine.scaleX.toFixed(2);
+      if (values.aScaleY) values.aScaleY.textContent = state.affine.scaleY.toFixed(2);
+      if (values.aShearX) values.aShearX.textContent = state.affine.shearX.toFixed(2);
+      if (values.aShearY) values.aShearY.textContent = state.affine.shearY.toFixed(2);
 
-      values.pTiltX.textContent = state.perspective.tiltX.toFixed(2);
-      values.pTiltY.textContent = state.perspective.tiltY.toFixed(2);
-      values.pFocal.textContent = state.perspective.focalScale.toFixed(2);
-      values.pZRot.textContent = `${state.perspective.zRotationDeg}°`;
+      if (values.pTiltX) values.pTiltX.textContent = state.perspective.tiltX.toFixed(2);
+      if (values.pTiltY) values.pTiltY.textContent = state.perspective.tiltY.toFixed(2);
+      if (values.pFocal) values.pFocal.textContent = state.perspective.focalScale.toFixed(2);
+      if (values.pZRot) values.pZRot.textContent = `${state.perspective.zRotationDeg}°`;
 
-      values.cCurv.textContent = state.cylindrical.curvature.toFixed(2);
-      values.cDrop.textContent = state.cylindrical.perspectiveDrop.toFixed(2);
-      values.cZRot.textContent = `${state.cylindrical.zRotationDeg}°`;
-      values.cVStretch.textContent = state.cylindrical.verticalStretch.toFixed(2);
+      if (values.cCurv) values.cCurv.textContent = state.cylindrical.curvature.toFixed(2);
+      if (values.cDrop) values.cDrop.textContent = state.cylindrical.perspectiveDrop.toFixed(2);
+      if (values.cZRot) values.cZRot.textContent = `${state.cylindrical.zRotationDeg}°`;
+      if (values.cVStretch) values.cVStretch.textContent = state.cylindrical.verticalStretch.toFixed(2);
 
-      contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
-      patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-      patchSizeInline.textContent = state.patchSize;
+      if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
+      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
+      if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
     }
 
     function syncControlsFromState() {
-      texOccupancy.value = String(state.texture.occupancy);
-      texDilation.value = String(state.texture.dilation);
-      texAngle.value = String(state.texture.angleShiftDeg);
-      texShift.value = String(state.texture.normShift);
-      patchSizeControl.value = String(state.patchSize);
+      if (texOccupancy) texOccupancy.value = String(state.texture.occupancy);
+      if (texDilation) texDilation.value = String(state.texture.dilation);
+      if (texAngle) texAngle.value = String(state.texture.angleShiftDeg);
+      if (texShift) texShift.value = String(state.texture.normShift);
+      if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
 
-      controls["param-a-rot"].value = String(state.affine.rotationDeg);
-      controls["param-a-scalex"].value = String(state.affine.scaleX);
-      controls["param-a-scaley"].value = String(state.affine.scaleY);
-      controls["param-a-shearx"].value = String(state.affine.shearX);
-      controls["param-a-sheary"].value = String(state.affine.shearY);
+      if (controls["param-a-rot"]) controls["param-a-rot"].value = String(state.affine.rotationDeg);
+      if (controls["param-a-scalex"]) controls["param-a-scalex"].value = String(state.affine.scaleX);
+      if (controls["param-a-scaley"]) controls["param-a-scaley"].value = String(state.affine.scaleY);
+      if (controls["param-a-shearx"]) controls["param-a-shearx"].value = String(state.affine.shearX);
+      if (controls["param-a-sheary"]) controls["param-a-sheary"].value = String(state.affine.shearY);
 
-      controls["param-p-tiltx"].value = String(state.perspective.tiltX);
-      controls["param-p-tilty"].value = String(state.perspective.tiltY);
-      controls["param-p-focal"].value = String(state.perspective.focalScale);
-      controls["param-p-zrot"].value = String(state.perspective.zRotationDeg);
+      if (controls["param-p-tiltx"]) controls["param-p-tiltx"].value = String(state.perspective.tiltX);
+      if (controls["param-p-tilty"]) controls["param-p-tilty"].value = String(state.perspective.tiltY);
+      if (controls["param-p-focal"]) controls["param-p-focal"].value = String(state.perspective.focalScale);
+      if (controls["param-p-zrot"]) controls["param-p-zrot"].value = String(state.perspective.zRotationDeg);
 
-      controls["param-c-curv"].value = String(state.cylindrical.curvature);
-      controls["param-c-drop"].value = String(state.cylindrical.perspectiveDrop);
-      controls["param-c-zrot"].value = String(state.cylindrical.zRotationDeg);
-      controls["param-c-vstretch"].value = String(state.cylindrical.verticalStretch);
+      if (controls["param-c-curv"]) controls["param-c-curv"].value = String(state.cylindrical.curvature);
+      if (controls["param-c-drop"]) controls["param-c-drop"].value = String(state.cylindrical.perspectiveDrop);
+      if (controls["param-c-zrot"]) controls["param-c-zrot"].value = String(state.cylindrical.zRotationDeg);
+      if (controls["param-c-vstretch"]) controls["param-c-vstretch"].value = String(state.cylindrical.verticalStretch);
 
-      contrastSlider.value = String(state.previewContrast);
+      if (contrastSlider) contrastSlider.value = String(state.previewContrast);
+
       refreshControlLabels();
       refreshProjectionPanels();
       refreshAutocorrStateUI();
     }
 
     function updateStateFromControls() {
-      state.texture.occupancy = parseFloat(texOccupancy.value);
-      state.texture.dilation = parseInt(texDilation.value, 10);
-      state.texture.angleShiftDeg = parseInt(texAngle.value, 10);
-      state.texture.normShift = parseInt(texShift.value, 10);
-      state.patchSize = clamp(parseInt(patchSizeControl.value, 10), 32, 128);
+      if (texOccupancy) state.texture.occupancy = parseFloat(texOccupancy.value);
+      if (texDilation) state.texture.dilation = parseInt(texDilation.value, 10);
+      if (texAngle) state.texture.angleShiftDeg = parseInt(texAngle.value, 10);
+      if (texShift) state.texture.normShift = parseInt(texShift.value, 10);
+      if (patchSizeControl) state.patchSize = clamp(parseInt(patchSizeControl.value, 10), 32, 128);
 
-      state.affine.rotationDeg = parseInt(controls["param-a-rot"].value, 10);
-      state.affine.scaleX = parseFloat(controls["param-a-scalex"].value);
-      state.affine.scaleY = parseFloat(controls["param-a-scaley"].value);
-      state.affine.shearX = parseFloat(controls["param-a-shearx"].value);
-      state.affine.shearY = parseFloat(controls["param-a-sheary"].value);
+      if (controls["param-a-rot"]) state.affine.rotationDeg = parseInt(controls["param-a-rot"].value, 10);
+      if (controls["param-a-scalex"]) state.affine.scaleX = parseFloat(controls["param-a-scalex"].value);
+      if (controls["param-a-scaley"]) state.affine.scaleY = parseFloat(controls["param-a-scaley"].value);
+      if (controls["param-a-shearx"]) state.affine.shearX = parseFloat(controls["param-a-shearx"].value);
+      if (controls["param-a-sheary"]) state.affine.shearY = parseFloat(controls["param-a-sheary"].value);
 
-      state.perspective.tiltX = parseFloat(controls["param-p-tiltx"].value);
-      state.perspective.tiltY = parseFloat(controls["param-p-tilty"].value);
-      state.perspective.focalScale = parseFloat(controls["param-p-focal"].value);
-      state.perspective.zRotationDeg = parseInt(controls["param-p-zrot"].value, 10);
+      if (controls["param-p-tiltx"]) state.perspective.tiltX = parseFloat(controls["param-p-tiltx"].value);
+      if (controls["param-p-tilty"]) state.perspective.tiltY = parseFloat(controls["param-p-tilty"].value);
+      if (controls["param-p-focal"]) state.perspective.focalScale = parseFloat(controls["param-p-focal"].value);
+      if (controls["param-p-zrot"]) state.perspective.zRotationDeg = parseInt(controls["param-p-zrot"].value, 10);
 
-      state.cylindrical.curvature = parseFloat(controls["param-c-curv"].value);
-      state.cylindrical.perspectiveDrop = parseFloat(controls["param-c-drop"].value);
-      state.cylindrical.zRotationDeg = parseInt(controls["param-c-zrot"].value, 10);
-      state.cylindrical.verticalStretch = parseFloat(controls["param-c-vstretch"].value);
+      if (controls["param-c-curv"]) state.cylindrical.curvature = parseFloat(controls["param-c-curv"].value);
+      if (controls["param-c-drop"]) state.cylindrical.perspectiveDrop = parseFloat(controls["param-c-drop"].value);
+      if (controls["param-c-zrot"]) state.cylindrical.zRotationDeg = parseInt(controls["param-c-zrot"].value, 10);
+      if (controls["param-c-vstretch"]) state.cylindrical.verticalStretch = parseFloat(controls["param-c-vstretch"].value);
 
       refreshControlLabels();
     }
@@ -770,7 +815,7 @@
     }
 
     function renderAutocorrelationAt(x, y) {
-      if (!state.autocorrEnabled || !state.displayedImageData) return;
+      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
 
       const patchSize = state.patchSize;
       const computeSize = Math.min(state.previewComputeSize, patchSize);
@@ -792,8 +837,15 @@
           ? computeLaplacian2D(ac, computeSize, computeSize)
           : ac;
 
-      const contrasted = applyDisplayContrast(displayField, state.previewContrast);
-      const gray = normalizeToUint8(contrasted);
+      const contrasted01 = applyDisplayContrastMinMax(
+        displayField,
+        computeSize,
+        computeSize,
+        state.previewContrast,
+        state.autocorrCenterEraseRadius
+      );
+
+      const gray = float01ToUint8(contrasted01);
       const img = createImageDataFromGray(gray, computeSize, computeSize);
 
       const tempCanvas = document.createElement("canvas");
@@ -814,13 +866,15 @@
         1
       );
 
-      acorrModeLabel.textContent =
-        state.displayMode === "laplacian"
-          ? "Laplacian of Autocorrelation"
-          : "Autocorrelation";
+      if (acorrModeLabel) {
+        acorrModeLabel.textContent =
+          state.displayMode === "laplacian"
+            ? "Laplacian of Autocorrelation"
+            : "Autocorrelation";
+      }
 
-      patchSizeLabel.textContent = `Patch: ${patchSize} px`;
-      patchSizeInline.textContent = patchSize;
+      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${patchSize} px`;
+      if (patchSizeInline) patchSizeInline.textContent = patchSize;
 
       redrawMainCanvas();
     }
@@ -855,7 +909,11 @@
         0.4,
         4.0
       );
-      contrastSlider.value = String(state.previewContrast);
+
+      if (contrastSlider) {
+        contrastSlider.value = String(state.previewContrast);
+      }
+
       refreshControlLabels();
 
       if (state.autocorrEnabled) {
@@ -866,49 +924,64 @@
     // =========================================================
     // EVENTS
     // =========================================================
-    btnGenerate.addEventListener("click", () => {
-      updateStateFromControls();
-      renderGeneratedTexture();
-    });
+    if (btnGenerate) {
+      btnGenerate.addEventListener("click", () => {
+        updateStateFromControls();
+        renderGeneratedTexture();
+      });
+    }
 
-    btnProjection.addEventListener("click", () => {
-      cycleProjectionMode();
-    });
+    if (btnProjection) {
+      btnProjection.addEventListener("click", () => {
+        cycleProjectionMode();
+      });
+    }
 
-    btnAutocorr.addEventListener("click", () => {
-      state.autocorrEnabled = !state.autocorrEnabled;
-      refreshAutocorrStateUI();
+    if (btnAutocorr) {
+      btnAutocorr.addEventListener("click", () => {
+        state.autocorrEnabled = !state.autocorrEnabled;
+        refreshAutocorrStateUI();
 
-      if (state.autocorrEnabled) {
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
-      } else {
-        redrawMainCanvas();
-      }
-    });
+        if (state.autocorrEnabled) {
+          renderAutocorrelationAt(state.mouseX, state.mouseY);
+        } else {
+          redrawMainCanvas();
+        }
+      });
+    }
 
-    btnResetParams.addEventListener("click", () => {
-      resetCurrentProjectionParams();
-    });
+    if (btnResetParams) {
+      btnResetParams.addEventListener("click", () => {
+        resetCurrentProjectionParams();
+      });
+    }
 
-    contrastSlider.addEventListener("input", () => {
-      state.previewContrast = parseFloat(contrastSlider.value);
-      refreshControlLabels();
-      if (state.autocorrEnabled) {
-        schedulePreviewRender();
-      }
-    });
+    if (contrastSlider) {
+      contrastSlider.addEventListener("input", () => {
+        state.previewContrast = parseFloat(contrastSlider.value);
+        refreshControlLabels();
 
-    patchSizeControl.addEventListener("input", () => {
-      updateStateFromControls();
-      refreshControlLabels();
-      if (state.autocorrEnabled) {
-        schedulePreviewRender();
-      } else {
-        redrawMainCanvas();
-      }
-    });
+        if (state.autocorrEnabled) {
+          schedulePreviewRender();
+        }
+      });
+    }
+
+    if (patchSizeControl) {
+      patchSizeControl.addEventListener("input", () => {
+        updateStateFromControls();
+        refreshControlLabels();
+
+        if (state.autocorrEnabled) {
+          schedulePreviewRender();
+        } else {
+          redrawMainCanvas();
+        }
+      });
+    }
 
     [texOccupancy, texDilation, texAngle, texShift].forEach((el) => {
+      if (!el) return;
       el.addEventListener("input", () => {
         updateStateFromControls();
         renderGeneratedTexture();
@@ -916,6 +989,7 @@
     });
 
     controlIds.forEach((id) => {
+      if (!controls[id]) return;
       controls[id].addEventListener("input", () => {
         updateStateFromControls();
         applyCurrentProjection();
@@ -939,7 +1013,7 @@
       canvasHovered = true;
 
       if (state.autocorrEnabled) {
-        acorrPreview.style.display = "block";
+        if (acorrPreview) acorrPreview.style.display = "block";
         updateAutocorrPreviewPosition(event.clientX, event.clientY);
         renderAutocorrelationAt(state.mouseX, state.mouseY);
       }
@@ -947,30 +1021,34 @@
 
     canvas.addEventListener("mouseleave", () => {
       canvasHovered = false;
-      if (state.autocorrEnabled) {
+      if (state.autocorrEnabled && acorrPreview) {
         acorrPreview.style.display = "none";
       }
       redrawMainCanvas();
     });
 
-    canvas.addEventListener("wheel", (event) => {
-      if (!state.autocorrEnabled) return;
+    canvas.addEventListener(
+      "wheel",
+      (event) => {
+        if (!state.autocorrEnabled) return;
 
-      event.preventDefault();
+        event.preventDefault();
 
-      const step = event.deltaY < 0 ? 4 : -4;
-      let next = clamp(state.patchSize + step, 32, 128);
+        const step = event.deltaY < 0 ? 4 : -4;
+        let next = clamp(state.patchSize + step, 32, 128);
 
-      if (next % 2 !== 0) {
-        next += step > 0 ? 1 : -1;
-        next = clamp(next, 32, 128);
-      }
+        if (next % 2 !== 0) {
+          next += step > 0 ? 1 : -1;
+          next = clamp(next, 32, 128);
+        }
 
-      state.patchSize = next;
-      patchSizeControl.value = String(state.patchSize);
-      refreshControlLabels();
-      schedulePreviewRender();
-    }, { passive: false });
+        state.patchSize = next;
+        if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
+        refreshControlLabels();
+        schedulePreviewRender();
+      },
+      { passive: false }
+    );
 
     window.addEventListener("keydown", (event) => {
       if (!state.autocorrEnabled || !canvasHovered) return;

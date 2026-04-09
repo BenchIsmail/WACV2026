@@ -75,12 +75,14 @@
     const texDilation = document.getElementById("tex-dilation");
     const texAngle = document.getElementById("tex-angle");
     const texShift = document.getElementById("tex-shift");
+    const texBlur = document.getElementById("tex-blur");
     const patchSizeControl = document.getElementById("patch-size-control");
 
     const valOccupancy = document.getElementById("val-occupancy");
     const valDilation = document.getElementById("val-dilation");
     const valAngle = document.getElementById("val-angle");
     const valShift = document.getElementById("val-shift");
+    const valBlur = document.getElementById("val-blur");
     const valPatchSlider = document.getElementById("val-patch-slider");
 
     const panelAffine = document.getElementById("panel-affine");
@@ -119,7 +121,8 @@
         occupancy: 0.16,
         dilation: 1,
         angleShiftDeg: 90,
-        normShift: 22
+        normShift: 22,
+        blurSigma: 0.0
       },
       affine: {
         rotationDeg: -18,
@@ -357,6 +360,7 @@
       if (valDilation) valDilation.textContent = String(state.texture.dilation);
       if (valAngle) valAngle.textContent = `${state.texture.angleShiftDeg}°`;
       if (valShift) valShift.textContent = String(state.texture.normShift);
+      if (valBlur) valBlur.textContent = state.texture.blurSigma.toFixed(2);
       if (valPatchSlider) valPatchSlider.textContent = `${state.patchSize} px`;
 
       if (values.aRot) values.aRot.textContent = `${state.affine.rotationDeg}°`;
@@ -385,6 +389,7 @@
       if (texDilation) texDilation.value = String(state.texture.dilation);
       if (texAngle) texAngle.value = String(state.texture.angleShiftDeg);
       if (texShift) texShift.value = String(state.texture.normShift);
+      if (texBlur) texBlur.value = String(state.texture.blurSigma);
       if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
 
       if (controls["param-a-rot"]) controls["param-a-rot"].value = String(state.affine.rotationDeg);
@@ -412,10 +417,11 @@
 
     function updateStateFromControls() {
       if (texOccupancy) state.texture.occupancy = parseFloat(texOccupancy.value);
-      if (texDilation) state.texture.dilation = parseInt(texDilation.value, 10);
+      if (texDilation) state.texture.dilation = clamp(parseInt(texDilation.value, 10), 0, 2);
       if (texAngle) state.texture.angleShiftDeg = parseInt(texAngle.value, 10);
       if (texShift) state.texture.normShift = parseInt(texShift.value, 10);
-      if (patchSizeControl) state.patchSize = clamp(parseInt(patchSizeControl.value, 10), 32, 128);
+      if (texBlur) state.texture.blurSigma = parseFloat(texBlur.value);
+      if (patchSizeControl) state.patchSize = clamp(parseInt(patchSizeControl.value, 10), 32, 140);
 
       if (controls["param-a-rot"]) state.affine.rotationDeg = parseInt(controls["param-a-rot"].value, 10);
       if (controls["param-a-scalex"]) state.affine.scaleX = parseFloat(controls["param-a-scalex"].value);
@@ -511,7 +517,67 @@
       return arr[idx];
     }
 
-    function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift) {
+    function gaussianKernel1D(sigma) {
+      if (sigma <= 0) {
+        return new Float64Array([1]);
+      }
+
+      const radius = Math.max(1, Math.ceil(3 * sigma));
+      const size = 2 * radius + 1;
+      const kernel = new Float64Array(size);
+      const denom = 2 * sigma * sigma;
+
+      let sum = 0;
+      for (let i = -radius; i <= radius; i++) {
+        const v = Math.exp(-(i * i) / denom);
+        kernel[i + radius] = v;
+        sum += v;
+      }
+
+      for (let i = 0; i < size; i++) {
+        kernel[i] /= sum;
+      }
+
+      return kernel;
+    }
+
+    function blurGraySeparable(gray, w, h, sigma) {
+      if (sigma <= 0) {
+        return new Uint8ClampedArray(gray);
+      }
+
+      const kernel = gaussianKernel1D(sigma);
+      const radius = Math.floor(kernel.length / 2);
+
+      const temp = new Float64Array(w * h);
+      const out = new Uint8ClampedArray(w * h);
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0;
+          for (let k = -radius; k <= radius; k++) {
+            const xx = clamp(x + k, 0, w - 1);
+            sum += gray[y * w + xx] * kernel[k + radius];
+          }
+          temp[y * w + x] = sum;
+        }
+      }
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let sum = 0;
+          for (let k = -radius; k <= radius; k++) {
+            const yy = clamp(y + k, 0, h - 1);
+            sum += temp[yy * w + x] * kernel[k + radius];
+          }
+          out[y * w + x] = clamp(Math.round(sum), 0, 255);
+        }
+      }
+
+      return out;
+    }
+
+    function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift, blurSigma) {
       const k = degToRad(angleShiftDeg);
 
       const shift1 = { x: 0, y: Math.round(normShift) };
@@ -528,7 +594,8 @@
         binary[i] = combined[i] <= thr ? 0 : 255;
       }
 
-      return applyBinaryDilation(binary, w, h, dilationSize);
+      const dilated = applyBinaryDilation(binary, w, h, dilationSize);
+      return blurGraySeparable(dilated, w, h, blurSigma);
     }
 
     function renderGeneratedTexture() {
@@ -541,7 +608,8 @@
         state.texture.dilation,
         state.texture.occupancy,
         state.texture.angleShiftDeg,
-        state.texture.normShift
+        state.texture.normShift,
+        state.texture.blurSigma
       );
 
       const img = createImageDataFromGray(gray, w, h);
@@ -897,12 +965,6 @@
       applyCurrentProjection();
     }
 
-    function cycleProjectionMode() {
-      state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
-      refreshProjectionPanels();
-      applyCurrentProjection();
-    }
-
     function updatePreviewContrast(delta) {
       state.previewContrast = clamp(
         Math.round((state.previewContrast + delta) * 10) / 10,
@@ -919,6 +981,12 @@
       if (state.autocorrEnabled) {
         schedulePreviewRender();
       }
+    }
+
+    function cycleProjectionMode() {
+      state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
+      refreshProjectionPanels();
+      applyCurrentProjection();
     }
 
     // =========================================================
@@ -960,7 +1028,6 @@
       contrastSlider.addEventListener("input", () => {
         state.previewContrast = parseFloat(contrastSlider.value);
         refreshControlLabels();
-
         if (state.autocorrEnabled) {
           schedulePreviewRender();
         }
@@ -980,7 +1047,7 @@
       });
     }
 
-    [texOccupancy, texDilation, texAngle, texShift].forEach((el) => {
+    [texOccupancy, texDilation, texAngle, texShift, texBlur].forEach((el) => {
       if (!el) return;
       el.addEventListener("input", () => {
         updateStateFromControls();
@@ -1035,11 +1102,11 @@
         event.preventDefault();
 
         const step = event.deltaY < 0 ? 4 : -4;
-        let next = clamp(state.patchSize + step, 32, 128);
+        let next = clamp(state.patchSize + step, 32, 140);
 
         if (next % 2 !== 0) {
           next += step > 0 ? 1 : -1;
-          next = clamp(next, 32, 128);
+          next = clamp(next, 32, 140);
         }
 
         state.patchSize = next;

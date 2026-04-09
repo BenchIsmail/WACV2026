@@ -261,42 +261,46 @@
       return out;
     }
 
-    function normalizeFloatMinMax(arr) {
-      let min = Infinity;
-      let max = -Infinity;
+function normalizeByMaxAfterCenterRemoval(arr) {
+  let max = 0;
 
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
-      }
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] > max) max = arr[i];
+  }
 
-      const out = new Float64Array(arr.length);
+  const out = new Float64Array(arr.length);
 
-      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
-        return out;
-      }
+  if (!Number.isFinite(max) || max <= 1e-12) {
+    return out;
+  }
 
-      const range = max - min;
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = (arr[i] - min) / range;
-      }
+  for (let i = 0; i < arr.length; i++) {
+    out[i] = arr[i] / max;
+  }
 
-      return out;
-    }
+  return out;
+}
 
-    function applyDisplayContrastMinMax(arr, width, height, contrast, centerEraseRadius) {
-      const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
-      const normalized = normalizeFloatMinMax(noCenter);
-      const out = new Float64Array(normalized.length);
-      const gamma = 1 / Math.max(contrast, 1e-6);
+function applyDisplayContrastMax(arr, width, height, contrast, centerEraseRadius) {
+  const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
 
-      for (let i = 0; i < normalized.length; i++) {
-        out[i] = Math.pow(clamp(normalized[i], 0, 1), gamma);
-      }
+  // si jamais il y a des valeurs négatives (ex: laplacien), on les clippe
+  // pour garder un affichage simple basé sur le max positif
+  const positive = new Float64Array(noCenter.length);
+  for (let i = 0; i < noCenter.length; i++) {
+    positive[i] = Math.max(0, noCenter[i]);
+  }
 
-      return out;
-    }
+  const normalized = normalizeByMaxAfterCenterRemoval(positive);
+  const out = new Float64Array(normalized.length);
+
+  // contraste = gain linéaire, sans gamma
+  for (let i = 0; i < normalized.length; i++) {
+    out[i] = clamp(normalized[i] * contrast, 0, 1);
+  }
+
+  return out;
+}
 
     function float01ToUint8(arr01) {
       const out = new Uint8ClampedArray(arr01.length);
@@ -904,8 +908,8 @@
         state.displayMode === "laplacian"
           ? computeLaplacian2D(ac, computeSize, computeSize)
           : ac;
-
-      const contrasted01 = applyDisplayContrastMinMax(
+      
+      const contrasted01 = applyDisplayContrastMax(
         displayField,
         computeSize,
         computeSize,

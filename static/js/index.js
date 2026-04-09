@@ -118,11 +118,11 @@
 
     const DEFAULTS = {
       texture: {
-        occupancy: 0.40,
-        dilation: 0,
+        occupancy: 0.16,
+        dilation: 1,
         angleShiftDeg: 90,
         normShift: 22,
-        blurSigma: 1.05
+        blurSigma: 0.0
       },
       affine: {
         rotationDeg: -18,
@@ -153,7 +153,7 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
-      patchSize: 90,
+      patchSize: 60,
       previewContrast: 1.5,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
@@ -261,46 +261,42 @@
       return out;
     }
 
-function normalizeByMaxAfterCenterRemoval(arr) {
-  let max = 0;
+    function normalizeFloatMinMax(arr) {
+      let min = Infinity;
+      let max = -Infinity;
 
-  for (let i = 0; i < arr.length; i++) {
-    if (arr[i] > max) max = arr[i];
-  }
+      for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (v < min) min = v;
+        if (v > max) max = v;
+      }
 
-  const out = new Float64Array(arr.length);
+      const out = new Float64Array(arr.length);
 
-  if (!Number.isFinite(max) || max <= 1e-12) {
-    return out;
-  }
+      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
+        return out;
+      }
 
-  for (let i = 0; i < arr.length; i++) {
-    out[i] = arr[i] / max;
-  }
+      const range = max - min;
+      for (let i = 0; i < arr.length; i++) {
+        out[i] = (arr[i] - min) / range;
+      }
 
-  return out;
-}
+      return out;
+    }
 
-function applyDisplayContrastMax(arr, width, height, contrast, centerEraseRadius) {
-  const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
+    function applyDisplayContrastMinMax(arr, width, height, contrast, centerEraseRadius) {
+      const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
+      const normalized = normalizeFloatMinMax(noCenter);
+      const out = new Float64Array(normalized.length);
+      const gamma = 1 / Math.max(contrast, 1e-6);
 
-  // si jamais il y a des valeurs négatives (ex: laplacien), on les clippe
-  // pour garder un affichage simple basé sur le max positif
-  const positive = new Float64Array(noCenter.length);
-  for (let i = 0; i < noCenter.length; i++) {
-    positive[i] = Math.max(0, noCenter[i]);
-  }
+      for (let i = 0; i < normalized.length; i++) {
+        out[i] = Math.pow(clamp(normalized[i], 0, 1), gamma);
+      }
 
-  const normalized = normalizeByMaxAfterCenterRemoval(positive);
-  const out = new Float64Array(normalized.length);
-
-  // contraste = gain linéaire, sans gamma
-  for (let i = 0; i < normalized.length; i++) {
-    out[i] = clamp(normalized[i] * contrast, 0, 1);
-  }
-
-  return out;
-}
+      return out;
+    }
 
     function float01ToUint8(arr01) {
       const out = new Uint8ClampedArray(arr01.length);
@@ -908,8 +904,8 @@ function applyDisplayContrastMax(arr, width, height, contrast, centerEraseRadius
         state.displayMode === "laplacian"
           ? computeLaplacian2D(ac, computeSize, computeSize)
           : ac;
-      
-      const contrasted01 = applyDisplayContrastMax(
+
+      const contrasted01 = applyDisplayContrastMinMax(
         displayField,
         computeSize,
         computeSize,

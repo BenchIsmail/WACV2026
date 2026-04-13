@@ -1190,8 +1190,6 @@
       );
     
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
-});
-    derAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
     });
 
     canvas.addEventListener("mouseleave", () => {

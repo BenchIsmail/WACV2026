@@ -374,6 +374,44 @@
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
     }
+    function updateAutocorrPreviewPositionFromCanvasPoint(x, y) {
+      if (!acorrPreview || !canvas) return;
+    
+      const canvasRect = canvas.getBoundingClientRect();
+    
+      const clientX = canvasRect.left + (x / canvas.width) * canvasRect.width;
+      const clientY = canvasRect.top + (y / canvas.height) * canvasRect.height;
+    
+      const pad = 18;
+      const previewRect = acorrPreview.getBoundingClientRect();
+    
+      let left = clientX + pad;
+      let top = clientY - previewRect.height * 0.35;
+    
+      if (left + previewRect.width > window.innerWidth - 8) {
+        left = clientX - previewRect.width - pad;
+      }
+    
+      if (top < 8) {
+        top = 8;
+      }
+      if (top + previewRect.height > window.innerHeight - 8) {
+        top = window.innerHeight - previewRect.height - 8;
+      }
+    
+      acorrPreview.style.left = `${left}px`;
+      acorrPreview.style.top = `${top}px`;
+    }
+    function updatePreviewAnchor() {
+      if (!state.autocorrEnabled || !acorrPreview) return;
+    
+      if (state.lockedPatch) {
+        updateAutocorrPreviewPositionFromCanvasPoint(
+          state.lockedPatchX,
+          state.lockedPatchY
+        );
+      }
+    }
 
     function refreshAutocorrStateUI() {
       if (autocorrStateLabel) {
@@ -496,7 +534,13 @@
     
       rafPreview = window.requestAnimationFrame(() => {
         rafPreview = null;
+    
         const p = getActivePatchCenter();
+    
+        if (state.lockedPatch) {
+          updateAutocorrPreviewPositionFromCanvasPoint(p.x, p.y);
+        }
+    
         renderAutocorrelationAt(p.x, p.y);
       });
     }
@@ -1093,9 +1137,8 @@
       state.mouseY = pos.y;
     
       if (state.autocorrEnabled) {
-        updateAutocorrPreviewPosition(event.clientX, event.clientY);
-    
         if (!state.lockedPatch) {
+          updateAutocorrPreviewPosition(event.clientX, event.clientY);
           schedulePreviewRender();
         } else {
           redrawMainCanvas();
@@ -1107,11 +1150,20 @@
 
     canvas.addEventListener("mouseenter", (event) => {
       canvasHovered = true;
-
+    
       if (state.autocorrEnabled) {
         if (acorrPreview) acorrPreview.style.display = "block";
-        updateAutocorrPreviewPosition(event.clientX, event.clientY);
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
+    
+        if (state.lockedPatch) {
+          updateAutocorrPreviewPositionFromCanvasPoint(
+            state.lockedPatchX,
+            state.lockedPatchY
+          );
+          renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
+        } else {
+          updateAutocorrPreviewPosition(event.clientX, event.clientY);
+          renderAutocorrelationAt(state.mouseX, state.mouseY);
+        }
       }
     });
     canvas.addEventListener("contextmenu", (event) => {
@@ -1119,6 +1171,8 @@
     
       event.preventDefault();
       state.lockedPatch = false;
+    
+      updateAutocorrPreviewPosition(event.clientX, event.clientY);
       redrawMainCanvas();
       schedulePreviewRender();
     });
@@ -1130,15 +1184,23 @@
       state.lockedPatchX = pos.x;
       state.lockedPatchY = pos.y;
     
-      updateAutocorrPreviewPosition(event.clientX, event.clientY);
+      updateAutocorrPreviewPositionFromCanvasPoint(
+        state.lockedPatchX,
+        state.lockedPatchY
+      );
+    
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
+});
+    derAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
     });
 
     canvas.addEventListener("mouseleave", () => {
       canvasHovered = false;
-      if (state.autocorrEnabled && acorrPreview) {
+    
+      if (state.autocorrEnabled && acorrPreview && !state.lockedPatch) {
         acorrPreview.style.display = "none";
       }
+    
       redrawMainCanvas();
     });
 

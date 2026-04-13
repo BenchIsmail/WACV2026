@@ -1018,19 +1018,32 @@
     // =========================================================
     // PARAMETER ACTIONS
     // =========================================================
-    function resetCurrentProjectionParams() {
-      const mode = state.projectionModes[state.projectionIndex];
-
-      if (mode === "Affine") {
-        state.affine = { ...DEFAULTS.affine };
-      } else if (mode === "Perspective") {
-        state.perspective = { ...DEFAULTS.perspective };
-      } else {
-        state.cylindrical = { ...DEFAULTS.cylindrical };
-      }
-
+    function resetAllParams() {
+      state.texture = { ...DEFAULTS.texture };
+      state.affine = { ...DEFAULTS.affine };
+      state.perspective = { ...DEFAULTS.perspective };
+      state.cylindrical = { ...DEFAULTS.cylindrical };
+    
+      state.patchSize = 60;
+      state.previewContrast = 1.5;
+      state.displayMode = "autocorr";
+    
+      state.projectionIndex = 0; // revient à Affine
+      state.lockedPatch = false;
+      state.mouseX = state.size / 2;
+      state.mouseY = state.size / 2;
+      state.lockedPatchX = state.mouseX;
+      state.lockedPatchY = state.mouseY;
+    
       syncControlsFromState();
-      applyCurrentProjection();
+      renderGeneratedTexture();
+    
+      if (state.autocorrEnabled) {
+        const p = getActivePatchCenter();
+        renderAutocorrelationAt(p.x, p.y);
+      } else {
+        redrawMainCanvas();
+      }
     }
 
     function updatePreviewContrast(delta) {
@@ -1088,7 +1101,7 @@
 
     if (btnResetParams) {
       btnResetParams.addEventListener("click", () => {
-        resetCurrentProjectionParams();
+        resetAllParams();
       });
     }
 

@@ -160,6 +160,9 @@
       projectionIndex: 0,
       mouseX: 450,
       mouseY: 450,
+      lockedPatch: false,
+      lockedPatchX: 450,
+      lockedPatchY: 450,
       displayMode: "autocorr",
       texture: { ...DEFAULTS.texture },
       affine: { ...DEFAULTS.affine },
@@ -183,6 +186,12 @@
     // =========================================================
     // UTILS
     // =========================================================
+    function getActivePatchCenter() {
+      if (state.lockedPatch) {
+        return { x: state.lockedPatchX, y: state.lockedPatchY };
+      }
+      return { x: state.mouseX, y: state.mouseY };
+    }
     function clamp(v, a, b) {
       return Math.max(a, Math.min(b, v));
     }
@@ -480,15 +489,15 @@
       if (controls["param-c-vstretch"]) state.cylindrical.verticalStretch = parseFloat(controls["param-c-vstretch"].value);
 
       refreshControlLabels();
-    }
-
+    } 
     function schedulePreviewRender() {
       if (!state.autocorrEnabled || !state.displayedImageData) return;
       if (rafPreview !== null) return;
-
+    
       rafPreview = window.requestAnimationFrame(() => {
         rafPreview = null;
-        renderAutocorrelationAt(state.mouseX, state.mouseY);
+        const p = getActivePatchCenter();
+        renderAutocorrelationAt(p.x, p.y);
       });
     }
 
@@ -814,14 +823,16 @@
 
       if (state.autocorrEnabled) {
         const half = Math.floor(state.patchSize / 2);
-        const x = Math.round(state.mouseX) - half;
-        const y = Math.round(state.mouseY) - half;
+        const p = getActivePatchCenter();
+        const x = Math.round(p.x) - half;
+        const y = Math.round(p.y) - half;
 
         ctx.save();
-        ctx.strokeStyle = "#00bcd4";
-        ctx.lineWidth = 2;
+        ctx.strokeStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
+        ctx.lineWidth = state.lockedPatch ? 3 : 2;
         ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
         ctx.restore();
+        
       }
     }
 
@@ -1022,9 +1033,9 @@
       btnAutocorr.addEventListener("click", () => {
         state.autocorrEnabled = !state.autocorrEnabled;
         refreshAutocorrStateUI();
-
         if (state.autocorrEnabled) {
-          renderAutocorrelationAt(state.mouseX, state.mouseY);
+          const p = getActivePatchCenter();
+          renderAutocorrelationAt(p.x, p.y);
         } else {
           redrawMainCanvas();
         }
@@ -1080,10 +1091,15 @@
       const pos = getCanvasMousePos(event, canvas);
       state.mouseX = pos.x;
       state.mouseY = pos.y;
-
+    
       if (state.autocorrEnabled) {
         updateAutocorrPreviewPosition(event.clientX, event.clientY);
-        schedulePreviewRender();
+    
+        if (!state.lockedPatch) {
+          schedulePreviewRender();
+        } else {
+          redrawMainCanvas();
+        }
       } else {
         redrawMainCanvas();
       }
@@ -1097,6 +1113,25 @@
         updateAutocorrPreviewPosition(event.clientX, event.clientY);
         renderAutocorrelationAt(state.mouseX, state.mouseY);
       }
+    });
+    canvas.addEventListener("contextmenu", (event) => {
+      if (!state.autocorrEnabled) return;
+    
+      event.preventDefault();
+      state.lockedPatch = false;
+      redrawMainCanvas();
+      schedulePreviewRender();
+    });
+    canvas.addEventListener("click", (event) => {
+      if (!state.autocorrEnabled) return;
+    
+      const pos = getCanvasMousePos(event, canvas);
+      state.lockedPatch = true;
+      state.lockedPatchX = pos.x;
+      state.lockedPatchY = pos.y;
+    
+      updateAutocorrPreviewPosition(event.clientX, event.clientY);
+      renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
     });
 
     canvas.addEventListener("mouseleave", () => {
@@ -1143,6 +1178,11 @@
         event.preventDefault();
         state.displayMode = state.displayMode === "autocorr" ? "laplacian" : "autocorr";
         refreshAutocorrStateUI();
+        schedulePreviewRender();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        state.lockedPatch = false;
+        redrawMainCanvas();
         schedulePreviewRender();
       }
     });

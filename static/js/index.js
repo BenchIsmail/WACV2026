@@ -118,11 +118,11 @@
 
     const DEFAULTS = {
       texture: {
-        occupancy: 0.16,
-        dilation: 1,
+        occupancy: 0.40,
+        dilation: 0,
         angleShiftDeg: 90,
         normShift: 22,
-        blurSigma: 0.0
+        blurSigma: 1.05
       },
       affine: {
         rotationDeg: -18,
@@ -153,7 +153,7 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
-      patchSize: 60,
+      patchSize: 90,
       previewContrast: 1.5,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
@@ -1024,7 +1024,7 @@
       state.perspective = { ...DEFAULTS.perspective };
       state.cylindrical = { ...DEFAULTS.cylindrical };
     
-      state.patchSize = 60;
+      state.patchSize = 90;
       state.previewContrast = 1.5;
       state.displayMode = "autocorr";
     

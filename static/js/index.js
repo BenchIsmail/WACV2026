@@ -228,6 +228,46 @@
       }
       return img;
     }
+    function sampleGrayBilinear(imageData, x, y, background = 255) {
+    const w = imageData.width;
+    const h = imageData.height;
+    const data = imageData.data;
+  
+    if (x < 0 || x > w - 1 || y < 0 || y > h - 1) {
+      return background;
+    }
+  
+    const x0 = Math.floor(x);
+    const y0 = Math.floor(y);
+    const x1 = Math.min(x0 + 1, w - 1);
+    const y1 = Math.min(y0 + 1, h - 1);
+  
+    const ax = x - x0;
+    const ay = y - y0;
+  
+    function grayAt(xx, yy) {
+      const idx = (yy * w + xx) * 4;
+      return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+    }
+  
+    const g00 = grayAt(x0, y0);
+    const g10 = grayAt(x1, y0);
+    const g01 = grayAt(x0, y1);
+    const g11 = grayAt(x1, y1);
+  
+    const g0 = g00 * (1 - ax) + g10 * ax;
+    const g1 = g01 * (1 - ax) + g11 * ax;
+  
+    return g0 * (1 - ay) + g1 * ay;
+  }
+  
+  function setGrayPixel(dst, pixelIndex, gray) {
+    const v = clamp(Math.round(gray), 0, 255);
+    dst[pixelIndex] = v;
+    dst[pixelIndex + 1] = v;
+    dst[pixelIndex + 2] = v;
+    dst[pixelIndex + 3] = 255;
+  }
 
     function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
       targetCtx.save();
@@ -626,16 +666,21 @@
       const tmpCanvas = document.createElement("canvas");
       tmpCanvas.width = imageData.width;
       tmpCanvas.height = imageData.height;
-      tmpCanvas.getContext("2d").putImageData(imageData, 0, 0);
-
+    
+      const tctx = tmpCanvas.getContext("2d", { willReadFrequently: true });
+      tctx.putImageData(imageData, 0, 0);
+    
       const outCanvas = document.createElement("canvas");
       outCanvas.width = imageData.width;
       outCanvas.height = imageData.height;
-      const octx = outCanvas.getContext("2d");
-
+    
+      const octx = outCanvas.getContext("2d", { willReadFrequently: true });
+      octx.imageSmoothingEnabled = true;
+      octx.imageSmoothingQuality = "high";
+    
       octx.fillStyle = "white";
       octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-
+    
       octx.save();
       octx.translate(outCanvas.width / 2, outCanvas.height / 2);
       octx.rotate(degToRad(state.affine.rotationDeg));
@@ -649,115 +694,91 @@
       );
       octx.drawImage(tmpCanvas, -outCanvas.width / 2, -outCanvas.height / 2);
       octx.restore();
-
-      return canvasToImageData(outCanvas);
+    
+      return octx.getImageData(0, 0, outCanvas.width, outCanvas.height);
     }
 
     function applyPerspectiveProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
       const out = new ImageData(w, h);
-      const src = imageData.data;
       const dst = out.data;
-
+    
       const cx = w / 2;
       const cy = h / 2;
-
+    
       const tiltX = state.perspective.tiltX;
       const tiltY = state.perspective.tiltY;
-      const focalScale = state.perspective.focalScale;
+      const focalScale = Math.max(0.05, state.perspective.focalScale);
       const zRot = degToRad(state.perspective.zRotationDeg);
-
+    
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
-
+    
           const p = rotate2D(xn, yn, -zRot);
           const xr = p.x;
           const yr = p.y;
-
+    
           const denomX = 1 + tiltX * yr;
           const denomY = 1 + tiltY * xr;
-
+    
           const srcXn = (xr / focalScale) / denomX;
           const srcYn = (yr / focalScale) / denomY;
-
-          const sx = Math.round(srcXn * cx + cx);
-          const sy = Math.round(srcYn * cy + cy);
-
+    
+          const sx = srcXn * cx + cx;
+          const sy = srcYn * cy + cy;
+    
           const di = (y * w + x) * 4;
-
-          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-            const si = (sy * w + sx) * 4;
-            dst[di] = src[si];
-            dst[di + 1] = src[si + 1];
-            dst[di + 2] = src[si + 2];
-            dst[di + 3] = 255;
-          } else {
-            dst[di] = 255;
-            dst[di + 1] = 255;
-            dst[di + 2] = 255;
-            dst[di + 3] = 255;
-          }
+          const gray = sampleGrayBilinear(imageData, sx, sy, 255);
+          setGrayPixel(dst, di, gray);
         }
       }
-
+    
       return out;
     }
 
     function applyCylindricalProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-      const src = imageData.data;
       const out = new ImageData(w, h);
       const dst = out.data;
-
+    
       const cx = w / 2;
       const cy = h / 2;
-
+    
       const curvature = Math.max(0.001, state.cylindrical.curvature);
       const perspectiveDrop = state.cylindrical.perspectiveDrop;
       const zRot = degToRad(state.cylindrical.zRotationDeg);
-      const vStretch = state.cylindrical.verticalStretch;
-
+      const vStretch = Math.max(0.05, state.cylindrical.verticalStretch);
+    
       const denomSin = Math.sin(curvature);
       const safeDenom = Math.abs(denomSin) < 1e-6 ? 1e-6 : denomSin;
-
+    
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
-
+    
           const p = rotate2D(xn, yn, -zRot);
           const xr = p.x;
           const yr = p.y;
-
+    
           const theta = xr * curvature;
           const srcXn = Math.sin(theta) / safeDenom;
           const depth = Math.cos(theta);
           const srcYn = (yr * vStretch) / (1 + perspectiveDrop * (1 - depth));
-
-          const sx = Math.round(srcXn * cx + cx);
-          const sy = Math.round(srcYn * cy + cy);
-
+    
+          const sx = srcXn * cx + cx;
+          const sy = srcYn * cy + cy;
+    
           const di = (y * w + x) * 4;
-
-          if (sx >= 0 && sx < w && sy >= 0 && sy < h) {
-            const si = (sy * w + sx) * 4;
-            dst[di] = src[si];
-            dst[di + 1] = src[si + 1];
-            dst[di + 2] = src[si + 2];
-            dst[di + 3] = 255;
-          } else {
-            dst[di] = 255;
-            dst[di + 1] = 255;
-            dst[di + 2] = 255;
-            dst[di + 3] = 255;
-          }
+          const gray = sampleGrayBilinear(imageData, sx, sy, 255);
+          setGrayPixel(dst, di, gray);
         }
       }
-
+    
       return out;
     }
 
@@ -810,27 +831,19 @@
     function extractPatchGrayResampled(imageData, cx, cy, patchSize, targetSize) {
       const out = new Float64Array(targetSize * targetSize);
       const half = patchSize / 2;
-      const w = imageData.width;
-      const h = imageData.height;
-      const data = imageData.data;
-
+    
       let k = 0;
       for (let j = 0; j < targetSize; j++) {
         const v = (j + 0.5) / targetSize;
         const yy = cy - half + v * patchSize;
-
+    
         for (let i = 0; i < targetSize; i++) {
           const u = (i + 0.5) / targetSize;
           const xx = cx - half + u * patchSize;
-
-          const xi = clamp(Math.round(xx), 0, w - 1);
-          const yi = clamp(Math.round(yy), 0, h - 1);
-          const idx = (yi * w + xi) * 4;
-
-          out[k++] = 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+          out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
         }
       }
-
+    
       return out;
     }
 

@@ -454,7 +454,7 @@
     <div class="acorr-preview-inner">
       <div class="acorr-preview-header">
         <span id="acorr-mode-label">Autocorrelation</span>
-        <span id="patch-size-label">Patch: 60 px</span>
+        <span id="patch-size-label">Patch: 90 px</span>
       </div>
 
       <canvas id="acorr-canvas" width="240" height="240"></canvas>
@@ -561,13 +561,13 @@
 
           <div class="interactive-status">
             <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
-            <span class="status-pill">Patch: <span id="patch-size-inline">60</span> px</span>
+            <span class="status-pill">Patch: <span id="patch-size-inline">90</span> px</span>
             <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
           </div>
 
           <p class="interactive-help">
             Active l’autocorrélation avec le bouton dédié. Déplace la souris sur l’image pour voir la zone locale.
-            Utilise la <strong>molette</strong> pour changer la taille du patch (60 au départ, max 140).
+            Utilise la <strong>molette</strong> pour changer la taille du patch (90 au départ, max 140).
             Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
             Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
           </p>
@@ -578,14 +578,14 @@
               <div class="control-grid">
                 <div class="control-row">
                   <span>Black occupancy</span>
-                  <span id="val-occupancy" class="control-value">0.16</span>
-                  <input id="tex-occupancy" type="range" min="0.05" max="0.40" step="0.01" value="0.16">
+                  <span id="val-occupancy" class="control-value">0.40</span>
+                  <input id="tex-occupancy" type="range" min="0.05" max="0.40" step="0.01" value="0.40">
                 </div>
 
                 <div class="control-row">
                   <span>Dilation radius</span>
-                  <span id="val-dilation" class="control-value">1</span>
-                  <input id="tex-dilation" type="range" min="0" max="2" step="1" value="1">
+                  <span id="val-dilation" class="control-value">0</span>
+                  <input id="tex-dilation" type="range" min="0" max="2" step="1" value="0">
                 </div>
 
                 <div class="control-row">
@@ -602,14 +602,14 @@
 
                 <div class="control-row">
                   <span>Gaussian blur</span>
-                  <span id="val-blur" class="control-value">0.00</span>
-                  <input id="tex-blur" type="range" min="0" max="4" step="0.05" value="0">
+                  <span id="val-blur" class="control-value">1.05</span>
+                  <input id="tex-blur" type="range" min="0" max="4" step="0.05" value="1.05">
                 </div>
 
                 <div class="control-row">
                   <span>Patch size</span>
-                  <span id="val-patch-slider" class="control-value">60 px</span>
-                  <input id="patch-size-control" type="range" min="32" max="140" step="2" value="60">
+                  <span id="val-patch-slider" class="control-value">90 px</span>
+                  <input id="patch-size-control" type="range" min="32" max="140" step="2" value="90">
                 </div>
               </div>
             </div>

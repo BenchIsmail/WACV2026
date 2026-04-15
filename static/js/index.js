@@ -1,3 +1,4 @@
+// index.js
 (function () {
   "use strict";
 
@@ -154,7 +155,7 @@
       sourceImageData: null,
       displayedImageData: null,
       patchSize: 90,
-      previewContrast: 1.5,
+      previewContrast: 2.2,
       autocorrEnabled: false,
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
@@ -169,7 +170,7 @@
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
       previewComputeSize: 64,
-      autocorrCenterEraseRadius: 5
+      centerBlendRadius: 6
     };
 
     let canvasHovered = false;
@@ -192,6 +193,7 @@
       }
       return { x: state.mouseX, y: state.mouseY };
     }
+
     function clamp(v, a, b) {
       return Math.max(a, Math.min(b, v));
     }
@@ -207,11 +209,6 @@
         x: c * x - s * y,
         y: s * x + c * y
       };
-    }
-
-    function canvasToImageData(srcCanvas) {
-      const cctx = srcCanvas.getContext("2d", { willReadFrequently: true });
-      return cctx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
     }
 
     function getCanvasMousePos(event, targetCanvas) {
@@ -237,72 +234,139 @@
       }
       return img;
     }
+
     function sampleGrayBilinear(imageData, x, y, background = 255) {
-    const w = imageData.width;
-    const h = imageData.height;
-    const data = imageData.data;
-  
-    if (x < 0 || x > w - 1 || y < 0 || y > h - 1) {
-      return background;
+      const w = imageData.width;
+      const h = imageData.height;
+      const data = imageData.data;
+
+      if (x < 0 || x > w - 1 || y < 0 || y > h - 1) {
+        return background;
+      }
+
+      const x0 = Math.floor(x);
+      const y0 = Math.floor(y);
+      const x1 = Math.min(x0 + 1, w - 1);
+      const y1 = Math.min(y0 + 1, h - 1);
+
+      const ax = x - x0;
+      const ay = y - y0;
+
+      function grayAt(xx, yy) {
+        const idx = (yy * w + xx) * 4;
+        return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+      }
+
+      const g00 = grayAt(x0, y0);
+      const g10 = grayAt(x1, y0);
+      const g01 = grayAt(x0, y1);
+      const g11 = grayAt(x1, y1);
+
+      const g0 = g00 * (1 - ax) + g10 * ax;
+      const g1 = g01 * (1 - ax) + g11 * ax;
+
+      return g0 * (1 - ay) + g1 * ay;
     }
-  
-    const x0 = Math.floor(x);
-    const y0 = Math.floor(y);
-    const x1 = Math.min(x0 + 1, w - 1);
-    const y1 = Math.min(y0 + 1, h - 1);
-  
-    const ax = x - x0;
-    const ay = y - y0;
-  
-    function grayAt(xx, yy) {
-      const idx = (yy * w + xx) * 4;
-      return 0.299 * data[idx] + 0.587 * data[idx + 1] + 0.114 * data[idx + 2];
+
+    function setGrayPixel(dst, pixelIndex, gray) {
+      const v = clamp(Math.round(gray), 0, 255);
+      dst[pixelIndex] = v;
+      dst[pixelIndex + 1] = v;
+      dst[pixelIndex + 2] = v;
+      dst[pixelIndex + 3] = 255;
     }
-  
-    const g00 = grayAt(x0, y0);
-    const g10 = grayAt(x1, y0);
-    const g01 = grayAt(x0, y1);
-    const g11 = grayAt(x1, y1);
-  
-    const g0 = g00 * (1 - ax) + g10 * ax;
-    const g1 = g01 * (1 - ax) + g11 * ax;
-  
-    return g0 * (1 - ay) + g1 * ay;
-  }
-  
-  function setGrayPixel(dst, pixelIndex, gray) {
-    const v = clamp(Math.round(gray), 0, 255);
-    dst[pixelIndex] = v;
-    dst[pixelIndex + 1] = v;
-    dst[pixelIndex + 2] = v;
-    dst[pixelIndex + 3] = 255;
-  }
 
     function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
+      const xx = Math.floor(x) + 0.5;
+      const yy = Math.floor(y) + 0.5;
+
       targetCtx.save();
       targetCtx.strokeStyle = color;
       targetCtx.lineWidth = lineWidth;
       targetCtx.beginPath();
-      targetCtx.moveTo(x - size, y);
-      targetCtx.lineTo(x + size, y);
-      targetCtx.moveTo(x, y - size);
-      targetCtx.lineTo(x, y + size);
+      targetCtx.moveTo(xx - size, yy);
+      targetCtx.lineTo(xx + size, yy);
+      targetCtx.moveTo(xx, yy - size);
+      targetCtx.lineTo(xx, yy + size);
       targetCtx.stroke();
       targetCtx.restore();
     }
 
-    function zeroCenterDisk(arr, width, height, radius) {
-      const out = new Float64Array(arr);
-      const cx = Math.floor(width / 2);
-      const cy = Math.floor(height / 2);
-      const r2 = radius * radius;
+    function percentile(values, p) {
+      const arr = Array.from(values).sort((a, b) => a - b);
+      const idx = Math.floor(clamp(p, 0, 1) * (arr.length - 1));
+      return arr[idx];
+    }
 
-      for (let y = Math.max(0, cy - radius); y <= Math.min(height - 1, cy + radius); y++) {
-        for (let x = Math.max(0, cx - radius); x <= Math.min(width - 1, cx + radius); x++) {
+    function percentileSorted(sortedArr, p) {
+      if (!sortedArr.length) return 0;
+      const idx = Math.floor(clamp(p, 0, 1) * (sortedArr.length - 1));
+      return sortedArr[idx];
+    }
+
+    function robustNormalizeFloat(arr, lowP = 0.01, highP = 0.995) {
+      const sorted = Array.from(arr).sort((a, b) => a - b);
+      const lo = percentileSorted(sorted, lowP);
+      const hi = percentileSorted(sorted, highP);
+
+      const out = new Float64Array(arr.length);
+
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+        return out;
+      }
+
+      const range = hi - lo;
+      for (let i = 0; i < arr.length; i++) {
+        out[i] = clamp((arr[i] - lo) / range, 0, 1);
+      }
+
+      return out;
+    }
+
+    function absArray(arr) {
+      const out = new Float64Array(arr.length);
+      for (let i = 0; i < arr.length; i++) {
+        out[i] = Math.abs(arr[i]);
+      }
+      return out;
+    }
+
+    function attenuateCenterDisk(arr, width, height, radius) {
+      if (radius <= 0) {
+        return new Float64Array(arr);
+      }
+
+      const out = new Float64Array(arr);
+      const cx = (width - 1) / 2;
+      const cy = (height - 1) / 2;
+      const annulus = [];
+
+      const rInner = radius;
+      const rOuter = radius + 4;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
           const dx = x - cx;
           const dy = y - cy;
-          if (dx * dx + dy * dy <= r2) {
-            out[y * width + x] = 0;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d > rInner && d <= rOuter) {
+            annulus.push(arr[y * width + x]);
+          }
+        }
+      }
+
+      const median = annulus.length ? percentile(annulus, 0.5) : 0;
+
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d <= radius) {
+            const idx = y * width + x;
+            const t = d / Math.max(radius, 1e-6);
+            const alpha = t * t;
+            out[idx] = alpha * arr[idx] + (1 - alpha) * median;
           }
         }
       }
@@ -310,33 +374,21 @@
       return out;
     }
 
-    function normalizeFloatMinMax(arr) {
-      let min = Infinity;
-      let max = -Infinity;
+    function applyDisplayContrastRobust(arr, width, height, contrast, mode) {
+      let work = new Float64Array(arr);
 
-      for (let i = 0; i < arr.length; i++) {
-        const v = arr[i];
-        if (v < min) min = v;
-        if (v > max) max = v;
+      if (mode === "laplacian") {
+        work = absArray(work);
       }
 
-      const out = new Float64Array(arr.length);
+      work = attenuateCenterDisk(work, width, height, state.centerBlendRadius);
 
-      if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) {
-        return out;
-      }
+      const normalized = robustNormalizeFloat(
+        work,
+        mode === "laplacian" ? 0.03 : 0.01,
+        mode === "laplacian" ? 0.998 : 0.995
+      );
 
-      const range = max - min;
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = (arr[i] - min) / range;
-      }
-
-      return out;
-    }
-
-    function applyDisplayContrastMinMax(arr, width, height, contrast, centerEraseRadius) {
-      const noCenter = zeroCenterDisk(arr, width, height, centerEraseRadius);
-      const normalized = normalizeFloatMinMax(noCenter);
       const out = new Float64Array(normalized.length);
       const gamma = 1 / Math.max(contrast, 1e-6);
 
@@ -374,43 +426,33 @@
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
     }
+
     function updateAutocorrPreviewPositionFromCanvasPoint(x, y) {
       if (!acorrPreview || !canvas) return;
-    
+
       const canvasRect = canvas.getBoundingClientRect();
-    
       const clientX = canvasRect.left + (x / canvas.width) * canvasRect.width;
       const clientY = canvasRect.top + (y / canvas.height) * canvasRect.height;
-    
+
       const pad = 18;
       const previewRect = acorrPreview.getBoundingClientRect();
-    
+
       let left = clientX + pad;
       let top = clientY - previewRect.height * 0.35;
-    
+
       if (left + previewRect.width > window.innerWidth - 8) {
         left = clientX - previewRect.width - pad;
       }
-    
+
       if (top < 8) {
         top = 8;
       }
       if (top + previewRect.height > window.innerHeight - 8) {
         top = window.innerHeight - previewRect.height - 8;
       }
-    
+
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
-    }
-    function updatePreviewAnchor() {
-      if (!state.autocorrEnabled || !acorrPreview) return;
-    
-      if (state.lockedPatch) {
-        updateAutocorrPreviewPositionFromCanvasPoint(
-          state.lockedPatchX,
-          state.lockedPatchY
-        );
-      }
     }
 
     function refreshAutocorrStateUI() {
@@ -527,20 +569,21 @@
       if (controls["param-c-vstretch"]) state.cylindrical.verticalStretch = parseFloat(controls["param-c-vstretch"].value);
 
       refreshControlLabels();
-    } 
+    }
+
     function schedulePreviewRender() {
       if (!state.autocorrEnabled || !state.displayedImageData) return;
       if (rafPreview !== null) return;
-    
+
       rafPreview = window.requestAnimationFrame(() => {
         rafPreview = null;
-    
+
         const p = getActivePatchCenter();
-    
+
         if (state.lockedPatch) {
           updateAutocorrPreviewPositionFromCanvasPoint(p.x, p.y);
         }
-    
+
         renderAutocorrelationAt(p.x, p.y);
       });
     }
@@ -602,12 +645,6 @@
       }
 
       return out;
-    }
-
-    function percentile(values, p) {
-      const arr = Array.from(values).sort((a, b) => a - b);
-      const idx = Math.floor(clamp(p, 0, 1) * (arr.length - 1));
-      return arr[idx];
     }
 
     function gaussianKernel1D(sigma) {
@@ -719,21 +756,21 @@
       const tmpCanvas = document.createElement("canvas");
       tmpCanvas.width = imageData.width;
       tmpCanvas.height = imageData.height;
-    
+
       const tctx = tmpCanvas.getContext("2d", { willReadFrequently: true });
       tctx.putImageData(imageData, 0, 0);
-    
+
       const outCanvas = document.createElement("canvas");
       outCanvas.width = imageData.width;
       outCanvas.height = imageData.height;
-    
+
       const octx = outCanvas.getContext("2d", { willReadFrequently: true });
       octx.imageSmoothingEnabled = true;
       octx.imageSmoothingQuality = "high";
-    
+
       octx.fillStyle = "white";
       octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-    
+
       octx.save();
       octx.translate(outCanvas.width / 2, outCanvas.height / 2);
       octx.rotate(degToRad(state.affine.rotationDeg));
@@ -747,7 +784,7 @@
       );
       octx.drawImage(tmpCanvas, -outCanvas.width / 2, -outCanvas.height / 2);
       octx.restore();
-    
+
       return octx.getImageData(0, 0, outCanvas.width, outCanvas.height);
     }
 
@@ -756,39 +793,39 @@
       const h = imageData.height;
       const out = new ImageData(w, h);
       const dst = out.data;
-    
+
       const cx = w / 2;
       const cy = h / 2;
-    
+
       const tiltX = state.perspective.tiltX;
       const tiltY = state.perspective.tiltY;
       const focalScale = Math.max(0.05, state.perspective.focalScale);
       const zRot = degToRad(state.perspective.zRotationDeg);
-    
+
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
-    
+
           const p = rotate2D(xn, yn, -zRot);
           const xr = p.x;
           const yr = p.y;
-    
+
           const denomX = 1 + tiltX * yr;
           const denomY = 1 + tiltY * xr;
-    
+
           const srcXn = (xr / focalScale) / denomX;
           const srcYn = (yr / focalScale) / denomY;
-    
+
           const sx = srcXn * cx + cx;
           const sy = srcYn * cy + cy;
-    
+
           const di = (y * w + x) * 4;
           const gray = sampleGrayBilinear(imageData, sx, sy, 255);
           setGrayPixel(dst, di, gray);
         }
       }
-    
+
       return out;
     }
 
@@ -797,41 +834,41 @@
       const h = imageData.height;
       const out = new ImageData(w, h);
       const dst = out.data;
-    
+
       const cx = w / 2;
       const cy = h / 2;
-    
+
       const curvature = Math.max(0.001, state.cylindrical.curvature);
       const perspectiveDrop = state.cylindrical.perspectiveDrop;
       const zRot = degToRad(state.cylindrical.zRotationDeg);
       const vStretch = Math.max(0.05, state.cylindrical.verticalStretch);
-    
+
       const denomSin = Math.sin(curvature);
       const safeDenom = Math.abs(denomSin) < 1e-6 ? 1e-6 : denomSin;
-    
+
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
-    
+
           const p = rotate2D(xn, yn, -zRot);
           const xr = p.x;
           const yr = p.y;
-    
+
           const theta = xr * curvature;
           const srcXn = Math.sin(theta) / safeDenom;
           const depth = Math.cos(theta);
           const srcYn = (yr * vStretch) / (1 + perspectiveDrop * (1 - depth));
-    
+
           const sx = srcXn * cx + cx;
           const sy = srcYn * cy + cy;
-    
+
           const di = (y * w + x) * 4;
           const gray = sampleGrayBilinear(imageData, sx, sy, 255);
           setGrayPixel(dst, di, gray);
         }
       }
-    
+
       return out;
     }
 
@@ -876,7 +913,6 @@
         ctx.lineWidth = state.lockedPatch ? 3 : 2;
         ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
         ctx.restore();
-        
       }
     }
 
@@ -886,19 +922,29 @@
     function extractPatchGrayResampled(imageData, cx, cy, patchSize, targetSize) {
       const out = new Float64Array(targetSize * targetSize);
       const half = patchSize / 2;
-    
+
       let k = 0;
       for (let j = 0; j < targetSize; j++) {
         const v = (j + 0.5) / targetSize;
         const yy = cy - half + v * patchSize;
-    
+
         for (let i = 0; i < targetSize; i++) {
           const u = (i + 0.5) / targetSize;
           const xx = cx - half + u * patchSize;
           out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
         }
       }
-    
+
+      let mean = 0;
+      for (let i = 0; i < out.length; i++) {
+        mean += out[i];
+      }
+      mean /= Math.max(out.length, 1);
+
+      for (let i = 0; i < out.length; i++) {
+        out[i] -= mean;
+      }
+
       return out;
     }
 
@@ -909,7 +955,8 @@
       for (let dy = -center; dy <= center; dy++) {
         for (let dx = -center; dx <= center; dx++) {
           let sum = 0.0;
-          let energy = 0.0;
+          let energyA = 0.0;
+          let energyB = 0.0;
 
           for (let y = 0; y < n; y++) {
             const yy = y + dy;
@@ -922,11 +969,13 @@
               const a = grayPatch[y * n + x];
               const b = grayPatch[yy * n + xx];
               sum += a * b;
-              energy += a * a;
+              energyA += a * a;
+              energyB += b * b;
             }
           }
 
-          out[(dy + center) * n + (dx + center)] = energy > 1e-9 ? sum / energy : 0;
+          const denom = Math.sqrt(Math.max(energyA * energyB, 1e-12));
+          out[(dy + center) * n + (dx + center)] = sum / denom;
         }
       }
 
@@ -955,8 +1004,8 @@
 
       const patchSize = state.patchSize;
       const computeSize = Math.min(state.previewComputeSize, patchSize);
-      const cx = Math.round(x);
-      const cy = Math.round(y);
+      const cx = x;
+      const cy = y;
 
       const patch = extractPatchGrayResampled(
         state.displayedImageData,
@@ -973,12 +1022,12 @@
           ? computeLaplacian2D(ac, computeSize, computeSize)
           : ac;
 
-      const contrasted01 = applyDisplayContrastMinMax(
+      const contrasted01 = applyDisplayContrastRobust(
         displayField,
         computeSize,
         computeSize,
         state.previewContrast,
-        state.autocorrCenterEraseRadius
+        state.displayMode
       );
 
       const gray = float01ToUint8(contrasted01);
@@ -987,7 +1036,8 @@
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = computeSize;
       tempCanvas.height = computeSize;
-      tempCanvas.getContext("2d").putImageData(img, 0, 0);
+      const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
+      tempCtx.putImageData(img, 0, 0);
 
       acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
       acorrCtx.imageSmoothingEnabled = false;
@@ -1023,21 +1073,21 @@
       state.affine = { ...DEFAULTS.affine };
       state.perspective = { ...DEFAULTS.perspective };
       state.cylindrical = { ...DEFAULTS.cylindrical };
-    
+
       state.patchSize = 90;
-      state.previewContrast = 1.5;
+      state.previewContrast = 2.2;
       state.displayMode = "autocorr";
-    
-      state.projectionIndex = 0; // revient à Affine
+
+      state.projectionIndex = 0;
       state.lockedPatch = false;
       state.mouseX = state.size / 2;
       state.mouseY = state.size / 2;
       state.lockedPatchX = state.mouseX;
       state.lockedPatchY = state.mouseY;
-    
+
       syncControlsFromState();
       renderGeneratedTexture();
-    
+
       if (state.autocorrEnabled) {
         const p = getActivePatchCenter();
         renderAutocorrelationAt(p.x, p.y);
@@ -1049,8 +1099,8 @@
     function updatePreviewContrast(delta) {
       state.previewContrast = clamp(
         Math.round((state.previewContrast + delta) * 10) / 10,
-        0.4,
-        4.0
+        0.2,
+        8.0
       );
 
       if (contrastSlider) {
@@ -1088,8 +1138,13 @@
 
     if (btnAutocorr) {
       btnAutocorr.addEventListener("click", () => {
+        if (!state.autocorrEnabled) {
+          state.displayMode = "autocorr";
+        }
+
         state.autocorrEnabled = !state.autocorrEnabled;
         refreshAutocorrStateUI();
+
         if (state.autocorrEnabled) {
           const p = getActivePatchCenter();
           renderAutocorrelationAt(p.x, p.y);
@@ -1148,7 +1203,7 @@
       const pos = getCanvasMousePos(event, canvas);
       state.mouseX = pos.x;
       state.mouseY = pos.y;
-    
+
       if (state.autocorrEnabled) {
         if (!state.lockedPatch) {
           updateAutocorrPreviewPosition(event.clientX, event.clientY);
@@ -1163,10 +1218,10 @@
 
     canvas.addEventListener("mouseenter", (event) => {
       canvasHovered = true;
-    
+
       if (state.autocorrEnabled) {
         if (acorrPreview) acorrPreview.style.display = "block";
-    
+
         if (state.lockedPatch) {
           updateAutocorrPreviewPositionFromCanvasPoint(
             state.lockedPatchX,
@@ -1179,39 +1234,41 @@
         }
       }
     });
+
     canvas.addEventListener("contextmenu", (event) => {
       if (!state.autocorrEnabled) return;
-    
+
       event.preventDefault();
       state.lockedPatch = false;
-    
+
       updateAutocorrPreviewPosition(event.clientX, event.clientY);
       redrawMainCanvas();
       schedulePreviewRender();
     });
+
     canvas.addEventListener("click", (event) => {
       if (!state.autocorrEnabled) return;
-    
+
       const pos = getCanvasMousePos(event, canvas);
       state.lockedPatch = true;
       state.lockedPatchX = pos.x;
       state.lockedPatchY = pos.y;
-    
+
       updateAutocorrPreviewPositionFromCanvasPoint(
         state.lockedPatchX,
         state.lockedPatchY
       );
-    
+
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
     });
 
     canvas.addEventListener("mouseleave", () => {
       canvasHovered = false;
-    
+
       if (state.autocorrEnabled && acorrPreview && !state.lockedPatch) {
         acorrPreview.style.display = "none";
       }
-    
+
       redrawMainCanvas();
     });
 

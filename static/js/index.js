@@ -187,6 +187,60 @@
     // =========================================================
     // UTILS
     // =========================================================
+    function normalizeVec3(v, eps = 1e-12) {
+      const n = Math.hypot(v[0], v[1], v[2]);
+      if (n < eps) {
+        throw new Error("Zero vector cannot be normalized");
+      }
+      return [v[0] / n, v[1] / n, v[2] / n];
+    }
+    
+    function dotVec3(a, b) {
+      return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
+    
+    function crossVec3(a, b) {
+      return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+      ];
+    }
+    
+    function addVec3(a, b) {
+      return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+    }
+    
+    function subVec3(a, b) {
+      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    }
+    
+    function scaleVec3(v, s) {
+      return [v[0] * s, v[1] * s, v[2] * s];
+    }
+    
+    function buildCameraBasisJS(viewDir, worldUp = [0, 0, 1], roll = 0) {
+      let fwd = normalizeVec3(viewDir);
+      let wu = normalizeVec3(worldUp);
+    
+      if (Math.abs(dotVec3(fwd, wu)) > 0.98) {
+        wu = [0, 1, 0];
+      }
+    
+      let right = normalizeVec3(crossVec3(fwd, wu));
+      let up = normalizeVec3(crossVec3(right, fwd));
+    
+      if (Math.abs(roll) > 1e-12) {
+        const cr = Math.cos(roll);
+        const sr = Math.sin(roll);
+        const right2 = addVec3(scaleVec3(right, cr), scaleVec3(up, sr));
+        const up2 = addVec3(scaleVec3(right, -sr), scaleVec3(up, cr));
+        right = right2;
+        up = up2;
+      }
+    
+      return { right, up, fwd };
+    }
     function getActivePatchCenter() {
       if (state.lockedPatch) {
         return { x: state.lockedPatchX, y: state.lockedPatchY };
@@ -834,41 +888,125 @@
       const h = imageData.height;
       const out = new ImageData(w, h);
       const dst = out.data;
-
-      const cx = w / 2;
-      const cy = h / 2;
-
-      const curvature = Math.max(0.001, state.cylindrical.curvature);
-      const perspectiveDrop = state.cylindrical.perspectiveDrop;
+    
+      // ---------------------------------------------------------
+      // Paramètres "site web" remappés vers les paramètres Python
+      // ---------------------------------------------------------
       const zRot = degToRad(state.cylindrical.zRotationDeg);
-      const vStretch = Math.max(0.05, state.cylindrical.verticalStretch);
-
-      const denomSin = Math.sin(curvature);
-      const safeDenom = Math.abs(denomSin) < 1e-6 ? 1e-6 : denomSin;
-
+    
+      // rayon du cylindre (unité arbitraire)
+      const radius = 1.0;
+    
+      // "curvature" pilote l’ouverture angulaire visible de l’étiquette
+      // plus grand => plus de courbure visible
+      const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
+    
+      // hauteur physique de l’étiquette
+      const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
+    
+      // "perspectiveDrop" pilote surtout la distance caméra
+      // plus petit => perspective plus forte
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
+    
+      // caméra placée devant le cylindre
+      const cameraPos = [radius + cameraDistance, 0.0, 0.0];
+    
+      // elle regarde vers le centre du cylindre
+      const target = [0.0, 0.0, 0.0];
+      const viewDir = subVec3(target, cameraPos);
+    
+      // focale en pixels
+      const focalPx = 0.95 * Math.max(w, h);
+    
+      const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
+    
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+    
+      const Cx = cameraPos[0];
+      const Cy = cameraPos[1];
+      const Cz = cameraPos[2];
+    
       for (let y = 0; y < h; y++) {
+        const yCam = -(y - cy);
+    
         for (let x = 0; x < w; x++) {
-          const xn = (x - cx) / cx;
-          const yn = (y - cy) / cy;
-
-          const p = rotate2D(xn, yn, -zRot);
-          const xr = p.x;
-          const yr = p.y;
-
-          const theta = xr * curvature;
-          const srcXn = Math.sin(theta) / safeDenom;
-          const depth = Math.cos(theta);
-          const srcYn = (yr * vStretch) / (1 + perspectiveDrop * (1 - depth));
-
-          const sx = srcXn * cx + cx;
-          const sy = srcYn * cy + cy;
-
+          const xCam = x - cx;
+    
+          // -----------------------------------------------------
+          // Rayon caméra identique à la logique Python
+          // D = x_cam*right + y_cam*up + focal*fwd
+          // -----------------------------------------------------
+          let D = addVec3(
+            addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)),
+            scaleVec3(fwd, focalPx)
+          );
+          D = normalizeVec3(D);
+    
+          const Dx = D[0];
+          const Dy = D[1];
+          const Dz = D[2];
+    
+          // -----------------------------------------------------
+          // Intersection rayon / cylindre X² + Y² = r²
+          // -----------------------------------------------------
+          const a = Dx * Dx + Dy * Dy;
+          const b = 2.0 * (Cx * Dx + Cy * Dy);
+          const c = Cx * Cx + Cy * Cy - radius * radius;
+    
+          let gray = 255;
+    
+          if (a > 1e-12) {
+            const disc = b * b - 4.0 * a * c;
+    
+            if (disc > 0.0) {
+              const sqrtDisc = Math.sqrt(disc);
+              const t1 = (-b - sqrtDisc) / (2.0 * a);
+              const t2 = (-b + sqrtDisc) / (2.0 * a);
+    
+              let t = Infinity;
+              if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
+              else if (t1 > 1e-6) t = t1;
+              else if (t2 > 1e-6) t = t2;
+    
+              if (Number.isFinite(t)) {
+                const Px = Cx + t * Dx;
+                const Py = Cy + t * Dy;
+                const Pz = Cz + t * Dz;
+    
+                const theta = Math.atan2(Py, Px);
+    
+                // point dans l’étiquette ?
+                const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
+                const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
+    
+                // face visible vers la caméra ?
+                const Nx = Math.cos(theta);
+                const Ny = Math.sin(theta);
+                const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
+    
+                if (insideAngular && insideVertical && facing) {
+                  // -------------------------------------------------
+                  // Conversion cylindre -> coordonnées texture source
+                  // même logique que deform_image_cylindrical Python
+                  // -------------------------------------------------
+                  const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
+                  const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
+    
+                  const sx = clamp(uNorm * (w - 1), 0, w - 1);
+                  const sy = clamp(vNorm * (h - 1), 0, h - 1);
+    
+                  gray = sampleGrayBilinear(imageData, sx, sy, 255);
+                }
+              }
+            }
+          }
+    
           const di = (y * w + x) * 4;
-          const gray = sampleGrayBilinear(imageData, sx, sy, 255);
           setGrayPixel(dst, di, gray);
         }
       }
-
+    
       return out;
     }
 

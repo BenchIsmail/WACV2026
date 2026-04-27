@@ -931,7 +931,7 @@
       const radius = 1.0;
       const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
       const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 2)));
       const cameraPos = [radius + cameraDistance, 0.0, 0.0];
       const target = [0.0, 0.0, 0.0];
       const viewDir = subVec3(target, cameraPos);
@@ -1016,7 +1016,7 @@
       const L = Math.max(0.05, state.shoulder.shoulderLength) * 2.0 * R1;
       const thetaHalf = clamp(state.shoulder.angularSpan * 0.55, 0.12, 1.35);
       const halfHeight = Math.max(0.15, state.shoulder.verticalStretch) * R1 * 0.95;
-      const cameraDistance = R1 * (1.7 + 3.0 * (1.0 - clamp(state.shoulder.cameraDistance, 0, 1.2) / 1.2));
+      const cameraDistance = R1 * (1.7 + 3.0 * (1.0 - clamp(state.shoulder.cameraDistance, 0, 2) / 1.2));
       const cameraPos = [R1 + cameraDistance, 0.0, 0.15];
       const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
       const focalPx = 0.95 * Math.max(w, h);
@@ -1249,7 +1249,7 @@
       const radius = 1.0;
       const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
       const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 2)));
       const cameraPos = [radius + cameraDistance, 0.0, 0.0];
       const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
       const focalPx = 0.95 * Math.max(w, h);

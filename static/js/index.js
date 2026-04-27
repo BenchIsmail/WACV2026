@@ -92,11 +92,15 @@
     const panelAffine = document.getElementById("panel-affine");
     const panelPerspective = document.getElementById("panel-perspective");
     const panelCylindrical = document.getElementById("panel-cylindrical");
+    const panelShoulder = document.getElementById("panel-shoulder");
+    const panelCrumpled = document.getElementById("panel-crumpled");
 
     const controlIds = [
       "param-a-rot", "param-a-scalex", "param-a-scaley", "param-a-shearx", "param-a-sheary",
       "param-p-tiltx", "param-p-tilty", "param-p-focal", "param-p-zrot",
-      "param-c-curv", "param-c-drop", "param-c-zrot", "param-c-vstretch"
+      "param-c-curv", "param-c-drop", "param-c-zrot", "param-c-vstretch",
+      "param-s-span", "param-s-camera", "param-s-neck", "param-s-shoulder", "param-s-roll", "param-s-vstretch",
+      "param-r-amp", "param-r-freq", "param-r-persp", "param-r-roll", "param-r-twist", "param-r-shade"
     ];
 
     const controls = {};
@@ -117,7 +121,19 @@
       cCurv: document.getElementById("val-c-curv"),
       cDrop: document.getElementById("val-c-drop"),
       cZRot: document.getElementById("val-c-zrot"),
-      cVStretch: document.getElementById("val-c-vstretch")
+      cVStretch: document.getElementById("val-c-vstretch"),
+      sSpan: document.getElementById("val-s-span"),
+      sCamera: document.getElementById("val-s-camera"),
+      sNeck: document.getElementById("val-s-neck"),
+      sShoulder: document.getElementById("val-s-shoulder"),
+      sRoll: document.getElementById("val-s-roll"),
+      sVStretch: document.getElementById("val-s-vstretch"),
+      rAmp: document.getElementById("val-r-amp"),
+      rFreq: document.getElementById("val-r-freq"),
+      rPersp: document.getElementById("val-r-persp"),
+      rRoll: document.getElementById("val-r-roll"),
+      rTwist: document.getElementById("val-r-twist"),
+      rShade: document.getElementById("val-r-shade")
     };
 
     const DEFAULTS = {
@@ -146,6 +162,22 @@
         perspectiveDrop: 0.35,
         zRotationDeg: 0,
         verticalStretch: 1.00
+      },
+      shoulder: {
+        angularSpan: 1.05,
+        cameraDistance: 0.35,
+        neckRadius: 0.55,
+        shoulderLength: 0.55,
+        zRotationDeg: 0,
+        verticalStretch: 1.00
+      },
+      crumpled: {
+        amplitude: 0.11,
+        frequency: 3.0,
+        perspective: 0.25,
+        zRotationDeg: 0,
+        twist: 0.18,
+        shade: 0.35
       }
     };
 
@@ -161,7 +193,7 @@
       previewContrast: 2.2,
       autocorrEnabled: false,
       peaksEnabled: false,
-      projectionModes: ["Affine", "Perspective", "Cylindrical"],
+      projectionModes: ["Affine", "Perspective", "Cylindrical", "Shoulder", "Crumpled"],
       projectionIndex: 0,
       mouseX: 450,
       mouseY: 450,
@@ -173,6 +205,8 @@
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
+      shoulder: { ...DEFAULTS.shoulder },
+      crumpled: { ...DEFAULTS.crumpled },
       previewComputeSize: 64,
       centerBlendRadius: 6,
 
@@ -554,6 +588,8 @@
       if (panelAffine) panelAffine.classList.toggle("is-active", mode === "Affine");
       if (panelPerspective) panelPerspective.classList.toggle("is-active", mode === "Perspective");
       if (panelCylindrical) panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
+      if (panelShoulder) panelShoulder.classList.toggle("is-active", mode === "Shoulder");
+      if (panelCrumpled) panelCrumpled.classList.toggle("is-active", mode === "Crumpled");
       if (projectionModeLabel) projectionModeLabel.textContent = mode;
     }
 
@@ -580,6 +616,20 @@
       if (values.cDrop) values.cDrop.textContent = state.cylindrical.perspectiveDrop.toFixed(2);
       if (values.cZRot) values.cZRot.textContent = `${state.cylindrical.zRotationDeg}°`;
       if (values.cVStretch) values.cVStretch.textContent = state.cylindrical.verticalStretch.toFixed(2);
+
+      if (values.sSpan) values.sSpan.textContent = state.shoulder.angularSpan.toFixed(2);
+      if (values.sCamera) values.sCamera.textContent = state.shoulder.cameraDistance.toFixed(2);
+      if (values.sNeck) values.sNeck.textContent = state.shoulder.neckRadius.toFixed(2);
+      if (values.sShoulder) values.sShoulder.textContent = state.shoulder.shoulderLength.toFixed(2);
+      if (values.sRoll) values.sRoll.textContent = `${state.shoulder.zRotationDeg}°`;
+      if (values.sVStretch) values.sVStretch.textContent = state.shoulder.verticalStretch.toFixed(2);
+
+      if (values.rAmp) values.rAmp.textContent = state.crumpled.amplitude.toFixed(2);
+      if (values.rFreq) values.rFreq.textContent = state.crumpled.frequency.toFixed(1);
+      if (values.rPersp) values.rPersp.textContent = state.crumpled.perspective.toFixed(2);
+      if (values.rRoll) values.rRoll.textContent = `${state.crumpled.zRotationDeg}°`;
+      if (values.rTwist) values.rTwist.textContent = state.crumpled.twist.toFixed(2);
+      if (values.rShade) values.rShade.textContent = state.crumpled.shade.toFixed(2);
 
       if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
@@ -610,6 +660,20 @@
       if (controls["param-c-drop"]) controls["param-c-drop"].value = String(state.cylindrical.perspectiveDrop);
       if (controls["param-c-zrot"]) controls["param-c-zrot"].value = String(state.cylindrical.zRotationDeg);
       if (controls["param-c-vstretch"]) controls["param-c-vstretch"].value = String(state.cylindrical.verticalStretch);
+
+      if (controls["param-s-span"]) controls["param-s-span"].value = String(state.shoulder.angularSpan);
+      if (controls["param-s-camera"]) controls["param-s-camera"].value = String(state.shoulder.cameraDistance);
+      if (controls["param-s-neck"]) controls["param-s-neck"].value = String(state.shoulder.neckRadius);
+      if (controls["param-s-shoulder"]) controls["param-s-shoulder"].value = String(state.shoulder.shoulderLength);
+      if (controls["param-s-roll"]) controls["param-s-roll"].value = String(state.shoulder.zRotationDeg);
+      if (controls["param-s-vstretch"]) controls["param-s-vstretch"].value = String(state.shoulder.verticalStretch);
+
+      if (controls["param-r-amp"]) controls["param-r-amp"].value = String(state.crumpled.amplitude);
+      if (controls["param-r-freq"]) controls["param-r-freq"].value = String(state.crumpled.frequency);
+      if (controls["param-r-persp"]) controls["param-r-persp"].value = String(state.crumpled.perspective);
+      if (controls["param-r-roll"]) controls["param-r-roll"].value = String(state.crumpled.zRotationDeg);
+      if (controls["param-r-twist"]) controls["param-r-twist"].value = String(state.crumpled.twist);
+      if (controls["param-r-shade"]) controls["param-r-shade"].value = String(state.crumpled.shade);
 
       if (contrastSlider) contrastSlider.value = String(state.previewContrast);
 
@@ -642,6 +706,20 @@
       if (controls["param-c-drop"]) state.cylindrical.perspectiveDrop = parseFloat(controls["param-c-drop"].value);
       if (controls["param-c-zrot"]) state.cylindrical.zRotationDeg = parseInt(controls["param-c-zrot"].value, 10);
       if (controls["param-c-vstretch"]) state.cylindrical.verticalStretch = parseFloat(controls["param-c-vstretch"].value);
+
+      if (controls["param-s-span"]) state.shoulder.angularSpan = parseFloat(controls["param-s-span"].value);
+      if (controls["param-s-camera"]) state.shoulder.cameraDistance = parseFloat(controls["param-s-camera"].value);
+      if (controls["param-s-neck"]) state.shoulder.neckRadius = parseFloat(controls["param-s-neck"].value);
+      if (controls["param-s-shoulder"]) state.shoulder.shoulderLength = parseFloat(controls["param-s-shoulder"].value);
+      if (controls["param-s-roll"]) state.shoulder.zRotationDeg = parseInt(controls["param-s-roll"].value, 10);
+      if (controls["param-s-vstretch"]) state.shoulder.verticalStretch = parseFloat(controls["param-s-vstretch"].value);
+
+      if (controls["param-r-amp"]) state.crumpled.amplitude = parseFloat(controls["param-r-amp"].value);
+      if (controls["param-r-freq"]) state.crumpled.frequency = parseFloat(controls["param-r-freq"].value);
+      if (controls["param-r-persp"]) state.crumpled.perspective = parseFloat(controls["param-r-persp"].value);
+      if (controls["param-r-roll"]) state.crumpled.zRotationDeg = parseInt(controls["param-r-roll"].value, 10);
+      if (controls["param-r-twist"]) state.crumpled.twist = parseFloat(controls["param-r-twist"].value);
+      if (controls["param-r-shade"]) state.crumpled.shade = parseFloat(controls["param-r-shade"].value);
 
       refreshControlLabels();
     }
@@ -914,13 +992,174 @@
       return out;
     }
 
+
+    function bottleProfileJS(z, R1, R2, L) {
+      let r = R1;
+      let dr = 0.0;
+      if (z > L / 2.0) {
+        r = R2;
+      } else if (z >= -L / 2.0) {
+        const u = (z + L / 2.0) / L;
+        r = R2 + 0.5 * (R1 - R2) * (1.0 + Math.cos(Math.PI * u));
+        dr = -0.5 * (R1 - R2) * Math.sin(Math.PI * u) * (Math.PI / L);
+      }
+      return { r, dr };
+    }
+
+    function applyShoulderProjection(imageData) {
+      const w = imageData.width;
+      const h = imageData.height;
+      const out = new ImageData(w, h);
+      const dst = out.data;
+      const R1 = 1.0;
+      const R2 = clamp(state.shoulder.neckRadius, 0.20, 0.95) * R1;
+      const L = Math.max(0.05, state.shoulder.shoulderLength) * 2.0 * R1;
+      const thetaHalf = clamp(state.shoulder.angularSpan * 0.55, 0.12, 1.35);
+      const halfHeight = Math.max(0.15, state.shoulder.verticalStretch) * R1 * 0.95;
+      const cameraDistance = R1 * (1.7 + 3.0 * (1.0 - clamp(state.shoulder.cameraDistance, 0, 1.2) / 1.2));
+      const cameraPos = [R1 + cameraDistance, 0.0, 0.15];
+      const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
+      const focalPx = 0.95 * Math.max(w, h);
+      const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], degToRad(state.shoulder.zRotationDeg));
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+      const Cx = cameraPos[0], Cy = cameraPos[1], Cz = cameraPos[2];
+
+      for (let y = 0; y < h; y++) {
+        const yCam = -(y - cy);
+        for (let x = 0; x < w; x++) {
+          const xCam = x - cx;
+          let D = addVec3(addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)), scaleVec3(fwd, focalPx));
+          D = normalizeVec3(D);
+          const Dx = D[0], Dy = D[1], Dz = D[2];
+          const A = Dx * Dx + Dy * Dy;
+          const B = 2.0 * (Cx * Dx + Cy * Dy);
+          const Cxy = Cx * Cx + Cy * Cy;
+          let gray = 255;
+          if (A > 1e-12) {
+            const disc = B * B - 4.0 * A * (Cxy - R1 * R1);
+            if (disc > 0.0) {
+              const sd = Math.sqrt(disc);
+              let tIn = (-B - sd) / (2.0 * A);
+              let tOut = (-B + sd) / (2.0 * A);
+              if (tOut > 1e-6) {
+                tIn = Math.max(tIn, 1e-6);
+                let prevT = tIn;
+                let prevF = 1.0;
+                let hit = false;
+                let lo = tIn;
+                let hi = tOut;
+                const steps = 36;
+                for (let i = 0; i <= steps; i++) {
+                  const t = tIn + (tOut - tIn) * (i / steps);
+                  const z = Cz + t * Dz;
+                  const prof = bottleProfileJS(z, R1, R2, L);
+                  const F = A * t * t + B * t + Cxy - prof.r * prof.r;
+                  if (i > 0 && prevF > 0 && F <= 0) {
+                    lo = prevT;
+                    hi = t;
+                    hit = true;
+                    break;
+                  }
+                  prevT = t;
+                  prevF = F;
+                }
+                if (hit) {
+                  for (let it = 0; it < 10; it++) {
+                    const tm = 0.5 * (lo + hi);
+                    const z = Cz + tm * Dz;
+                    const prof = bottleProfileJS(z, R1, R2, L);
+                    const Fm = A * tm * tm + B * tm + Cxy - prof.r * prof.r;
+                    if (Fm > 0) lo = tm;
+                    else hi = tm;
+                  }
+                  const t = 0.5 * (lo + hi);
+                  const Px = Cx + t * Dx;
+                  const Py = Cy + t * Dy;
+                  const Pz = Cz + t * Dz;
+                  const theta = Math.atan2(Py, Px);
+                  const uCm = R1 * theta;
+                  const prof = bottleProfileJS(Pz, R1, R2, L);
+                  let Nx = Px, Ny = Py, Nz = -prof.r * prof.dr;
+                  const nn = Math.max(Math.hypot(Nx, Ny, Nz), 1e-12);
+                  Nx /= nn; Ny /= nn; Nz /= nn;
+                  const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny + (Cz - Pz) * Nz) > 0.0;
+                  if (facing && uCm >= -thetaHalf * R1 && uCm <= thetaHalf * R1 && Pz >= -halfHeight && Pz <= halfHeight) {
+                    const uNorm = (uCm / R1 + thetaHalf) / (2.0 * thetaHalf);
+                    const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
+                    const sx = clamp(uNorm * (w - 1), 0, w - 1);
+                    const sy = clamp(vNorm * (h - 1), 0, h - 1);
+                    gray = sampleGrayBilinear(imageData, sx, sy, 255);
+                  }
+                }
+              }
+            }
+          }
+          setGrayPixel(dst, (y * w + x) * 4, gray);
+        }
+      }
+      return out;
+    }
+
+    function crumpleDisplacement(xn, yn) {
+      const amp = state.crumpled.amplitude;
+      const freq = state.crumpled.frequency;
+      const z1 = Math.sin(freq * 5.7 * xn + 1.3 * Math.sin(freq * 2.1 * yn));
+      const z2 = 0.55 * Math.sin(freq * 4.2 * (xn + yn) + 1.7);
+      const z3 = 0.35 * Math.sin(freq * 8.0 * (xn - 0.35 * yn) - 0.6);
+      const height = amp * (z1 + z2 + z3) / 1.9;
+      const gx = amp * (5.7 * Math.cos(freq * 5.7 * xn + 1.3 * Math.sin(freq * 2.1 * yn)) + 1.45 * Math.cos(freq * 4.2 * (xn + yn) + 1.7));
+      const gy = amp * (1.3 * 2.1 * Math.cos(freq * 2.1 * yn) * Math.cos(freq * 5.7 * xn + 1.3 * Math.sin(freq * 2.1 * yn)) + 1.45 * Math.cos(freq * 4.2 * (xn + yn) + 1.7));
+      return { height, gx, gy };
+    }
+
+    function applyCrumpledProjection(imageData) {
+      const w = imageData.width;
+      const h = imageData.height;
+      const out = new ImageData(w, h);
+      const dst = out.data;
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+      const roll = degToRad(state.crumpled.zRotationDeg);
+      const cr = Math.cos(-roll);
+      const sr = Math.sin(-roll);
+      const persp = state.crumpled.perspective;
+      const twist = state.crumpled.twist;
+      const shade = state.crumpled.shade;
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          let xn = (x - cx) / cx;
+          let yn = (y - cy) / cy;
+          const xr = cr * xn - sr * yn;
+          const yr = sr * xn + cr * yn;
+          xn = xr; yn = yr;
+          const d = crumpleDisplacement(xn, yn);
+          const twistAng = twist * d.height;
+          const ct = Math.cos(twistAng);
+          const st = Math.sin(twistAng);
+          const xw = ct * xn - st * yn;
+          const yw = st * xn + ct * yn;
+          const denom = Math.max(1.0 + persp * d.height + 0.08 * persp * yw, 0.15);
+          const sx = (xw / denom) * cx + cx;
+          const sy = (yw / denom) * cy + cy;
+          let gray = sampleGrayBilinear(imageData, sx, sy, 255);
+          const light = clamp(1.0 - shade * 0.30 * (Math.abs(d.gx) + Math.abs(d.gy)), 0.55, 1.18);
+          gray = 255 - (255 - gray) * light;
+          setGrayPixel(dst, (y * w + x) * 4, gray);
+        }
+      }
+      return out;
+    }
+
     function applyCurrentProjection() {
       if (!state.sourceImageData) return;
       const mode = state.projectionModes[state.projectionIndex];
       let result;
       if (mode === "Affine") result = applyAffineProjection(state.sourceImageData);
       else if (mode === "Perspective") result = applyPerspectiveProjection(state.sourceImageData);
-      else result = applyCylindricalProjection(state.sourceImageData);
+      else if (mode === "Cylindrical") result = applyCylindricalProjection(state.sourceImageData);
+      else if (mode === "Shoulder") result = applyShoulderProjection(state.sourceImageData);
+      else result = applyCrumpledProjection(state.sourceImageData);
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
       redrawMainCanvas();
@@ -961,7 +1200,8 @@
       const mode = state.projectionModes[state.projectionIndex];
       if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
       if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
-      return mapDisplayToSourceCylindrical(x, y);
+      if (mode === "Cylindrical") return mapDisplayToSourceCylindrical(x, y);
+      return { x, y };
     }
 
     function mapDisplayToSourceAffine(x, y) {
@@ -1572,6 +1812,8 @@
       state.affine = { ...DEFAULTS.affine };
       state.perspective = { ...DEFAULTS.perspective };
       state.cylindrical = { ...DEFAULTS.cylindrical };
+      state.shoulder = { ...DEFAULTS.shoulder };
+      state.crumpled = { ...DEFAULTS.crumpled };
       state.patchSize = 90;
       state.previewContrast = 2.2;
       state.displayMode = "autocorr";
@@ -1784,10 +2026,72 @@
       if (state.autocorrEnabled) schedulePreviewRender();
     });
 
+
+    // =========================================================
+    // EDITABLE SLIDER VALUES
+    // =========================================================
+    function enableEditableSliderValues() {
+      const pairs = [
+        [valOccupancy, texOccupancy], [valDilation, texDilation], [valAngle, texAngle],
+        [valShift, texShift], [valBlur, texBlur], [valPatchSlider, patchSizeControl],
+        [values.aRot, controls["param-a-rot"]], [values.aScaleX, controls["param-a-scalex"]],
+        [values.aScaleY, controls["param-a-scaley"]], [values.aShearX, controls["param-a-shearx"]],
+        [values.aShearY, controls["param-a-sheary"]], [values.pTiltX, controls["param-p-tiltx"]],
+        [values.pTiltY, controls["param-p-tilty"]], [values.pFocal, controls["param-p-focal"]],
+        [values.pZRot, controls["param-p-zrot"]], [values.cCurv, controls["param-c-curv"]],
+        [values.cDrop, controls["param-c-drop"]], [values.cZRot, controls["param-c-zrot"]],
+        [values.cVStretch, controls["param-c-vstretch"]], [values.sSpan, controls["param-s-span"]],
+        [values.sCamera, controls["param-s-camera"]], [values.sNeck, controls["param-s-neck"]],
+        [values.sShoulder, controls["param-s-shoulder"]], [values.sRoll, controls["param-s-roll"]],
+        [values.sVStretch, controls["param-s-vstretch"]], [values.rAmp, controls["param-r-amp"]],
+        [values.rFreq, controls["param-r-freq"]], [values.rPersp, controls["param-r-persp"]],
+        [values.rRoll, controls["param-r-roll"]], [values.rTwist, controls["param-r-twist"]],
+        [values.rShade, controls["param-r-shade"]], [contrastValue, contrastSlider]
+      ];
+
+      pairs.forEach(([label, slider]) => {
+        if (!label || !slider) return;
+        label.setAttribute("contenteditable", "true");
+        label.setAttribute("title", "Click to type a value, then press Enter");
+
+        label.addEventListener("focus", () => {
+          const range = document.createRange();
+          range.selectNodeContents(label);
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+        });
+
+        function commit() {
+          const raw = String(label.textContent || "").replace("°", "").replace("px", "").replace("×", "").trim();
+          const v = Number.parseFloat(raw.replace(",", "."));
+          if (!Number.isFinite(v)) {
+            refreshControlLabels();
+            return;
+          }
+          const min = Number.parseFloat(slider.min);
+          const max = Number.parseFloat(slider.max);
+          const vv = clamp(v, Number.isFinite(min) ? min : v, Number.isFinite(max) ? max : v);
+          slider.value = String(vv);
+          slider.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+
+        label.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            label.blur();
+          }
+          event.stopPropagation();
+        });
+        label.addEventListener("blur", commit);
+      });
+    }
+
     // =========================================================
     // INIT
     // =========================================================
     syncControlsFromState();
+    enableEditableSliderValues();
     refreshPeakStateUI();
     renderGeneratedTexture();
   });

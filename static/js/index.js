@@ -1476,44 +1476,46 @@
       const v1 = v10 * (1 - ac) + v11 * ac;
       return v0 * (1 - ar) + v1 * ar;
     }
-
-    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, candidatePeaks, acW, acH, detectionInfo) {
+    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, acW, acH) {
       if (!acorrCtx || !acorrCanvas) return;
+    
       const sx = acorrCanvas.width / acW;
       const sy = acorrCanvas.height / acH;
+    
       const cx = ((acW - 1) / 2.0) * sx;
       const cy = ((acH - 1) / 2.0) * sy;
-
-      if (candidatePeaks && candidatePeaks.length) {
-        candidatePeaks.slice(0, 20).forEach((p) => {
-          const px = p[1] * sx;
-          const py = p[0] * sy;
-          drawCircle(acorrCtx, px, py, 2.5, "rgba(255,255,255,0.65)", 1);
-        });
-      }
-
-      drawCircle(acorrCtx, cx, cy, 5, "#00ffff", 2);
-      drawText(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
-
+    
+      // Centre de l’autocorrélation
+      drawCircleCanvas(acorrCtx, cx, cy, 5, "#00ffff", 2);
+      drawTextCanvas(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
+    
+      // Pics théoriques désactivés
+      /*
       theoreticalPeaks.forEach((p) => {
         const px = p.x * sx;
         const py = p.y * sy;
-        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) return;
-        drawCross(acorrCtx, px, py, p.color, 7, 2);
-        drawText(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
+    
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
+          return;
+        }
+    
+        drawCrossSubpixel(acorrCtx, px, py, p.color, 7, 2);
+        drawTextCanvas(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
       });
-
+      */
+    
+      // Pics détectés uniquement
       foundPeaks.forEach((p) => {
         const px = p.x * sx;
         const py = p.y * sy;
-        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) return;
-        drawCircle(acorrCtx, px, py, 6, p.color, 2);
-        drawText(acorrCtx, p.name, px + 7, py - 7, p.color);
+    
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
+          return;
+        }
+    
+        drawCircleCanvas(acorrCtx, px, py, 6, p.color, 2);
+        drawTextCanvas(acorrCtx, p.name, px + 7, py - 7, p.color);
       });
-
-      if (detectionInfo && detectionInfo.energy_final !== undefined) {
-        drawText(acorrCtx, `E=${Number(detectionInfo.energy_final).toFixed(3)}`, 8, acorrCanvas.height - 10, "#ffffff");
-      }
     }
 
     function renderAutocorrelationAt(x, y) {

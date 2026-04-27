@@ -62,11 +62,13 @@
     const btnProjection = document.getElementById("btn-change-projection");
     const btnAutocorr = document.getElementById("btn-toggle-autocorr");
     const btnResetParams = document.getElementById("btn-reset-params");
+    const btnDetectPeaks = document.getElementById("btn-detect-peaks");
 
     const projectionModeLabel = document.getElementById("projection-mode-label");
     const patchSizeLabel = document.getElementById("patch-size-label");
     const patchSizeInline = document.getElementById("patch-size-inline");
     const autocorrStateLabel = document.getElementById("autocorr-state-label");
+    const peaksStateLabel = document.getElementById("peaks-state-label");
     const acorrModeLabel = document.getElementById("acorr-mode-label");
 
     const contrastSlider = document.getElementById("acorr-contrast");
@@ -154,23 +156,34 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
+
       patchSize: 90,
       previewContrast: 2.2,
+
       autocorrEnabled: false,
+      peaksEnabled: false,
+
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
+
       mouseX: 450,
       mouseY: 450,
+
       lockedPatch: false,
       lockedPatchX: 450,
       lockedPatchY: 450,
+
       displayMode: "autocorr",
+
       texture: { ...DEFAULTS.texture },
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
+
       previewComputeSize: 64,
-      centerBlendRadius: 6
+      centerBlendRadius: 6,
+
+      peakSearchRadius: 8
     };
 
     let canvasHovered = false;
@@ -187,67 +200,6 @@
     // =========================================================
     // UTILS
     // =========================================================
-    function normalizeVec3(v, eps = 1e-12) {
-      const n = Math.hypot(v[0], v[1], v[2]);
-      if (n < eps) {
-        throw new Error("Zero vector cannot be normalized");
-      }
-      return [v[0] / n, v[1] / n, v[2] / n];
-    }
-    
-    function dotVec3(a, b) {
-      return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    }
-    
-    function crossVec3(a, b) {
-      return [
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0]
-      ];
-    }
-    
-    function addVec3(a, b) {
-      return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
-    }
-    
-    function subVec3(a, b) {
-      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    }
-    
-    function scaleVec3(v, s) {
-      return [v[0] * s, v[1] * s, v[2] * s];
-    }
-    
-    function buildCameraBasisJS(viewDir, worldUp = [0, 0, 1], roll = 0) {
-      let fwd = normalizeVec3(viewDir);
-      let wu = normalizeVec3(worldUp);
-    
-      if (Math.abs(dotVec3(fwd, wu)) > 0.98) {
-        wu = [0, 1, 0];
-      }
-    
-      let right = normalizeVec3(crossVec3(fwd, wu));
-      let up = normalizeVec3(crossVec3(right, fwd));
-    
-      if (Math.abs(roll) > 1e-12) {
-        const cr = Math.cos(roll);
-        const sr = Math.sin(roll);
-        const right2 = addVec3(scaleVec3(right, cr), scaleVec3(up, sr));
-        const up2 = addVec3(scaleVec3(right, -sr), scaleVec3(up, cr));
-        right = right2;
-        up = up2;
-      }
-    
-      return { right, up, fwd };
-    }
-    function getActivePatchCenter() {
-      if (state.lockedPatch) {
-        return { x: state.lockedPatchX, y: state.lockedPatchY };
-      }
-      return { x: state.mouseX, y: state.mouseY };
-    }
-
     function clamp(v, a, b) {
       return Math.max(a, Math.min(b, v));
     }
@@ -265,6 +217,70 @@
       };
     }
 
+    function normalizeVec3(v, eps = 1e-12) {
+      const n = Math.hypot(v[0], v[1], v[2]);
+      if (n < eps) {
+        throw new Error("Zero vector cannot be normalized");
+      }
+      return [v[0] / n, v[1] / n, v[2] / n];
+    }
+
+    function dotVec3(a, b) {
+      return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    }
+
+    function crossVec3(a, b) {
+      return [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0]
+      ];
+    }
+
+    function addVec3(a, b) {
+      return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+    }
+
+    function subVec3(a, b) {
+      return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    }
+
+    function scaleVec3(v, s) {
+      return [v[0] * s, v[1] * s, v[2] * s];
+    }
+
+    function buildCameraBasisJS(viewDir, worldUp = [0, 0, 1], roll = 0) {
+      let fwd = normalizeVec3(viewDir);
+      let wu = normalizeVec3(worldUp);
+
+      if (Math.abs(dotVec3(fwd, wu)) > 0.98) {
+        wu = [0, 1, 0];
+      }
+
+      let right = normalizeVec3(crossVec3(fwd, wu));
+      let up = normalizeVec3(crossVec3(right, fwd));
+
+      if (Math.abs(roll) > 1e-12) {
+        const cr = Math.cos(roll);
+        const sr = Math.sin(roll);
+
+        const right2 = addVec3(scaleVec3(right, cr), scaleVec3(up, sr));
+        const up2 = addVec3(scaleVec3(right, -sr), scaleVec3(up, cr));
+
+        right = right2;
+        up = up2;
+      }
+
+      return { right, up, fwd };
+    }
+
+    function getActivePatchCenter() {
+      if (state.lockedPatch) {
+        return { x: state.lockedPatchX, y: state.lockedPatchY };
+      }
+      return { x: state.mouseX, y: state.mouseY };
+    }
+
     function getCanvasMousePos(event, targetCanvas) {
       const rect = targetCanvas.getBoundingClientRect();
       const sx = targetCanvas.width / rect.width;
@@ -278,14 +294,17 @@
 
     function createImageDataFromGray(gray, w, h) {
       const img = new ImageData(w, h);
+
       for (let i = 0; i < gray.length; i++) {
         const v = gray[i];
         const idx = i * 4;
+
         img.data[idx] = v;
         img.data[idx + 1] = v;
         img.data[idx + 2] = v;
         img.data[idx + 3] = 255;
       }
+
       return img;
     }
 
@@ -324,6 +343,7 @@
 
     function setGrayPixel(dst, pixelIndex, gray) {
       const v = clamp(Math.round(gray), 0, 255);
+
       dst[pixelIndex] = v;
       dst[pixelIndex + 1] = v;
       dst[pixelIndex + 2] = v;
@@ -346,6 +366,40 @@
       targetCtx.restore();
     }
 
+    function drawCrossSubpixel(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
+      targetCtx.save();
+      targetCtx.strokeStyle = color;
+      targetCtx.lineWidth = lineWidth;
+      targetCtx.beginPath();
+      targetCtx.moveTo(x - size, y);
+      targetCtx.lineTo(x + size, y);
+      targetCtx.moveTo(x, y - size);
+      targetCtx.lineTo(x, y + size);
+      targetCtx.stroke();
+      targetCtx.restore();
+    }
+
+    function drawCircleCanvas(targetCtx, x, y, radius, color, lineWidth = 2) {
+      targetCtx.save();
+      targetCtx.strokeStyle = color;
+      targetCtx.lineWidth = lineWidth;
+      targetCtx.beginPath();
+      targetCtx.arc(x, y, radius, 0, 2 * Math.PI);
+      targetCtx.stroke();
+      targetCtx.restore();
+    }
+
+    function drawTextCanvas(targetCtx, text, x, y, color) {
+      targetCtx.save();
+      targetCtx.font = "bold 11px Inter, Arial, sans-serif";
+      targetCtx.fillStyle = color;
+      targetCtx.strokeStyle = "rgba(0, 0, 0, 0.78)";
+      targetCtx.lineWidth = 3;
+      targetCtx.strokeText(text, x, y);
+      targetCtx.fillText(text, x, y);
+      targetCtx.restore();
+    }
+
     function percentile(values, p) {
       const arr = Array.from(values).sort((a, b) => a - b);
       const idx = Math.floor(clamp(p, 0, 1) * (arr.length - 1));
@@ -360,6 +414,7 @@
 
     function robustNormalizeFloat(arr, lowP = 0.01, highP = 0.995) {
       const sorted = Array.from(arr).sort((a, b) => a - b);
+
       const lo = percentileSorted(sorted, lowP);
       const hi = percentileSorted(sorted, highP);
 
@@ -370,6 +425,7 @@
       }
 
       const range = hi - lo;
+
       for (let i = 0; i < arr.length; i++) {
         out[i] = clamp((arr[i] - lo) / range, 0, 1);
       }
@@ -379,9 +435,11 @@
 
     function absArray(arr) {
       const out = new Float64Array(arr.length);
+
       for (let i = 0; i < arr.length; i++) {
         out[i] = Math.abs(arr[i]);
       }
+
       return out;
     }
 
@@ -393,8 +451,8 @@
       const out = new Float64Array(arr);
       const cx = (width - 1) / 2;
       const cy = (height - 1) / 2;
-      const annulus = [];
 
+      const annulus = [];
       const rInner = radius;
       const rOuter = radius + 4;
 
@@ -403,6 +461,7 @@
           const dx = x - cx;
           const dy = y - cy;
           const d = Math.sqrt(dx * dx + dy * dy);
+
           if (d > rInner && d <= rOuter) {
             annulus.push(arr[y * width + x]);
           }
@@ -416,6 +475,7 @@
           const dx = x - cx;
           const dy = y - cy;
           const d = Math.sqrt(dx * dx + dy * dy);
+
           if (d <= radius) {
             const idx = y * width + x;
             const t = d / Math.max(radius, 1e-6);
@@ -455,9 +515,11 @@
 
     function float01ToUint8(arr01) {
       const out = new Uint8ClampedArray(arr01.length);
+
       for (let i = 0; i < arr01.length; i++) {
         out[i] = clamp(Math.round(arr01[i] * 255), 0, 255);
       }
+
       return out;
     }
 
@@ -473,6 +535,7 @@
       if (left + rect.width > window.innerWidth - 8) {
         left = clientX - rect.width - pad;
       }
+
       if (top + rect.height > window.innerHeight - 8) {
         top = clientY - rect.height - pad;
       }
@@ -501,12 +564,29 @@
       if (top < 8) {
         top = 8;
       }
+
       if (top + previewRect.height > window.innerHeight - 8) {
         top = window.innerHeight - previewRect.height - 8;
       }
 
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
+    }
+
+    function refreshPeakStateUI() {
+      if (peaksStateLabel) {
+        peaksStateLabel.textContent = state.peaksEnabled ? "ON" : "OFF";
+      }
+
+      if (btnDetectPeaks) {
+        btnDetectPeaks.classList.toggle("is-success", !state.peaksEnabled);
+        btnDetectPeaks.classList.toggle("is-danger", state.peaksEnabled);
+
+        const textSpan = btnDetectPeaks.querySelector("span:last-child");
+        if (textSpan) {
+          textSpan.textContent = state.peaksEnabled ? "Hide Peaks" : "Detect Peaks";
+        }
+      }
     }
 
     function refreshAutocorrStateUI() {
@@ -525,8 +605,15 @@
             : "Autocorrelation";
       }
 
-      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-      if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
+      if (patchSizeLabel) {
+        patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
+      }
+
+      if (patchSizeInline) {
+        patchSizeInline.textContent = state.patchSize;
+      }
+
+      refreshPeakStateUI();
     }
 
     function refreshProjectionPanels() {
@@ -535,6 +622,7 @@
       if (panelAffine) panelAffine.classList.toggle("is-active", mode === "Affine");
       if (panelPerspective) panelPerspective.classList.toggle("is-active", mode === "Perspective");
       if (panelCylindrical) panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
+
       if (projectionModeLabel) projectionModeLabel.textContent = mode;
     }
 
@@ -565,6 +653,8 @@
       if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
+
+      refreshPeakStateUI();
     }
 
     function syncControlsFromState() {
@@ -596,6 +686,7 @@
       refreshControlLabels();
       refreshProjectionPanels();
       refreshAutocorrStateUI();
+      refreshPeakStateUI();
     }
 
     function updateStateFromControls() {
@@ -675,6 +766,7 @@
 
     function generateWhiteNoiseAndShifts(w, h, shift1, shift2) {
       const base = new Float64Array(w * h);
+
       for (let i = 0; i < base.length; i++) {
         base[i] = Math.random() * 2 - 1;
       }
@@ -684,8 +776,10 @@
       function wrappedIndex(x, y) {
         let xx = x % w;
         let yy = y % h;
+
         if (xx < 0) xx += w;
         if (yy < 0) yy += h;
+
         return yy * w + xx;
       }
 
@@ -694,6 +788,7 @@
           const idx = y * w + x;
           const idx1 = wrappedIndex(x - shift1.x, y - shift1.y);
           const idx2 = wrappedIndex(x - shift2.x, y - shift2.y);
+
           out[idx] = base[idx] + base[idx1] + base[idx2];
         }
       }
@@ -712,6 +807,7 @@
       const denom = 2 * sigma * sigma;
 
       let sum = 0;
+
       for (let i = -radius; i <= radius; i++) {
         const v = Math.exp(-(i * i) / denom);
         kernel[i + radius] = v;
@@ -739,10 +835,12 @@
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           let sum = 0;
+
           for (let k = -radius; k <= radius; k++) {
             const xx = clamp(x + k, 0, w - 1);
             sum += gray[y * w + xx] * kernel[k + radius];
           }
+
           temp[y * w + x] = sum;
         }
       }
@@ -750,10 +848,12 @@
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           let sum = 0;
+
           for (let k = -radius; k <= radius; k++) {
             const yy = clamp(y + k, 0, h - 1);
             sum += temp[yy * w + x] * kernel[k + radius];
           }
+
           out[y * w + x] = clamp(Math.round(sum), 0, 255);
         }
       }
@@ -764,7 +864,11 @@
     function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift, blurSigma) {
       const k = degToRad(angleShiftDeg);
 
-      const shift1 = { x: 0, y: Math.round(normShift) };
+      const shift1 = {
+        x: 0,
+        y: Math.round(normShift)
+      };
+
       const shift2 = {
         x: Math.round(normShift * Math.sin(k)),
         y: Math.round(normShift * Math.cos(k))
@@ -774,6 +878,7 @@
       const thr = percentile(combined, occupancy);
 
       const binary = new Uint8ClampedArray(w * h);
+
       for (let i = 0; i < combined.length; i++) {
         binary[i] = combined[i] <= thr ? 0 : 255;
       }
@@ -797,6 +902,7 @@
       );
 
       const img = createImageDataFromGray(gray, w, h);
+
       state.sourceImageData = img;
       state.sourceCtx.putImageData(img, 0, 0);
 
@@ -845,6 +951,7 @@
     function applyPerspectiveProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
+
       const out = new ImageData(w, h);
       const dst = out.data;
 
@@ -876,6 +983,7 @@
 
           const di = (y * w + x) * 4;
           const gray = sampleGrayBilinear(imageData, sx, sy, 255);
+
           setGrayPixel(dst, di, gray);
         }
       }
@@ -886,127 +994,103 @@
     function applyCylindricalProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
+
       const out = new ImageData(w, h);
       const dst = out.data;
-    
-      // ---------------------------------------------------------
-      // Paramètres "site web" remappés vers les paramètres Python
-      // ---------------------------------------------------------
+
       const zRot = degToRad(state.cylindrical.zRotationDeg);
-    
-      // rayon du cylindre (unité arbitraire)
+
       const radius = 1.0;
-    
-      // "curvature" pilote l’ouverture angulaire visible de l’étiquette
-      // plus grand => plus de courbure visible
       const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
-    
-      // hauteur physique de l’étiquette
       const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-    
-      // "perspectiveDrop" pilote surtout la distance caméra
-      // plus petit => perspective plus forte
-      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
-    
-      // caméra placée devant le cylindre
+
+      const cameraDistance =
+        radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
+
       const cameraPos = [radius + cameraDistance, 0.0, 0.0];
-    
-      // elle regarde vers le centre du cylindre
       const target = [0.0, 0.0, 0.0];
       const viewDir = subVec3(target, cameraPos);
-    
-      // focale en pixels
+
       const focalPx = 0.95 * Math.max(w, h);
-    
+
       const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
-    
+
       const cx = (w - 1) / 2;
       const cy = (h - 1) / 2;
-    
+
       const Cx = cameraPos[0];
       const Cy = cameraPos[1];
       const Cz = cameraPos[2];
-    
+
       for (let y = 0; y < h; y++) {
         const yCam = -(y - cy);
-    
+
         for (let x = 0; x < w; x++) {
           const xCam = x - cx;
-    
-          // -----------------------------------------------------
-          // Rayon caméra identique à la logique Python
-          // D = x_cam*right + y_cam*up + focal*fwd
-          // -----------------------------------------------------
+
           let D = addVec3(
             addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)),
             scaleVec3(fwd, focalPx)
           );
+
           D = normalizeVec3(D);
-    
+
           const Dx = D[0];
           const Dy = D[1];
           const Dz = D[2];
-    
-          // -----------------------------------------------------
-          // Intersection rayon / cylindre X² + Y² = r²
-          // -----------------------------------------------------
+
           const a = Dx * Dx + Dy * Dy;
           const b = 2.0 * (Cx * Dx + Cy * Dy);
           const c = Cx * Cx + Cy * Cy - radius * radius;
-    
+
           let gray = 255;
-    
+
           if (a > 1e-12) {
             const disc = b * b - 4.0 * a * c;
-    
+
             if (disc > 0.0) {
               const sqrtDisc = Math.sqrt(disc);
               const t1 = (-b - sqrtDisc) / (2.0 * a);
               const t2 = (-b + sqrtDisc) / (2.0 * a);
-    
+
               let t = Infinity;
+
               if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
               else if (t1 > 1e-6) t = t1;
               else if (t2 > 1e-6) t = t2;
-    
+
               if (Number.isFinite(t)) {
                 const Px = Cx + t * Dx;
                 const Py = Cy + t * Dy;
                 const Pz = Cz + t * Dz;
-    
+
                 const theta = Math.atan2(Py, Px);
-    
-                // point dans l’étiquette ?
+
                 const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
                 const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
-    
-                // face visible vers la caméra ?
+
                 const Nx = Math.cos(theta);
                 const Ny = Math.sin(theta);
                 const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
-    
+
                 if (insideAngular && insideVertical && facing) {
-                  // -------------------------------------------------
-                  // Conversion cylindre -> coordonnées texture source
-                  // même logique que deform_image_cylindrical Python
-                  // -------------------------------------------------
                   const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
                   const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
-    
+
                   const sx = clamp(uNorm * (w - 1), 0, w - 1);
                   const sy = clamp(vNorm * (h - 1), 0, h - 1);
-    
+
                   gray = sampleGrayBilinear(imageData, sx, sy, 255);
                 }
               }
             }
           }
-    
+
           const di = (y * w + x) * 4;
           setGrayPixel(dst, di, gray);
         }
       }
-    
+
       return out;
     }
 
@@ -1014,6 +1098,7 @@
       if (!state.sourceImageData) return;
 
       const mode = state.projectionModes[state.projectionIndex];
+
       let result;
 
       if (mode === "Affine") {
@@ -1026,6 +1111,7 @@
 
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
+
       redrawMainCanvas();
 
       if (state.autocorrEnabled) {
@@ -1043,6 +1129,7 @@
       if (state.autocorrEnabled) {
         const half = Math.floor(state.patchSize / 2);
         const p = getActivePatchCenter();
+
         const x = Math.round(p.x) - half;
         const y = Math.round(p.y) - half;
 
@@ -1055,13 +1142,304 @@
     }
 
     // =========================================================
-    // AUTOCORRELATION
+    // LOCAL GEOMETRY FOR THEORETICAL PEAKS
+    // =========================================================
+    function mat2MulVec(M, v) {
+      return [
+        M[0][0] * v[0] + M[0][1] * v[1],
+        M[1][0] * v[0] + M[1][1] * v[1]
+      ];
+    }
+
+    function mat2Inv(M, eps = 1e-12) {
+      const a = M[0][0];
+      const b = M[0][1];
+      const c = M[1][0];
+      const d = M[1][1];
+
+      const det = a * d - b * c;
+
+      if (Math.abs(det) < eps) return null;
+
+      return [
+        [d / det, -b / det],
+        [-c / det, a / det]
+      ];
+    }
+
+    function mapDisplayToSource(x, y) {
+      const mode = state.projectionModes[state.projectionIndex];
+
+      if (mode === "Affine") {
+        return mapDisplayToSourceAffine(x, y);
+      }
+
+      if (mode === "Perspective") {
+        return mapDisplayToSourcePerspective(x, y);
+      }
+
+      return mapDisplayToSourceCylindrical(x, y);
+    }
+
+    function mapDisplayToSourceAffine(x, y) {
+      const w = state.size;
+      const h = state.size;
+
+      const cx = w / 2;
+      const cy = h / 2;
+
+      const zRot = degToRad(state.affine.rotationDeg);
+
+      const A = [
+        [state.affine.scaleX, state.affine.shearX],
+        [state.affine.shearY, state.affine.scaleY]
+      ];
+
+      const R = [
+        [Math.cos(zRot), -Math.sin(zRot)],
+        [Math.sin(zRot), Math.cos(zRot)]
+      ];
+
+      const M = [
+        [
+          R[0][0] * A[0][0] + R[0][1] * A[1][0],
+          R[0][0] * A[0][1] + R[0][1] * A[1][1]
+        ],
+        [
+          R[1][0] * A[0][0] + R[1][1] * A[1][0],
+          R[1][0] * A[0][1] + R[1][1] * A[1][1]
+        ]
+      ];
+
+      const Minv = mat2Inv(M);
+      if (!Minv) return null;
+
+      const dx = x - cx;
+      const dy = y - cy;
+
+      const srcLocal = mat2MulVec(Minv, [dx, dy]);
+
+      return {
+        x: srcLocal[0] + cx,
+        y: srcLocal[1] + cy
+      };
+    }
+
+    function mapDisplayToSourcePerspective(x, y) {
+      const w = state.size;
+      const h = state.size;
+
+      const cx = w / 2;
+      const cy = h / 2;
+
+      const tiltX = state.perspective.tiltX;
+      const tiltY = state.perspective.tiltY;
+      const focalScale = Math.max(0.05, state.perspective.focalScale);
+      const zRot = degToRad(state.perspective.zRotationDeg);
+
+      const xn = (x - cx) / cx;
+      const yn = (y - cy) / cy;
+
+      const p = rotate2D(xn, yn, -zRot);
+
+      const xr = p.x;
+      const yr = p.y;
+
+      const denomX = 1 + tiltX * yr;
+      const denomY = 1 + tiltY * xr;
+
+      if (Math.abs(denomX) < 1e-9 || Math.abs(denomY) < 1e-9) {
+        return null;
+      }
+
+      const srcXn = (xr / focalScale) / denomX;
+      const srcYn = (yr / focalScale) / denomY;
+
+      return {
+        x: srcXn * cx + cx,
+        y: srcYn * cy + cy
+      };
+    }
+
+    function mapDisplayToSourceCylindrical(x, y) {
+      const w = state.size;
+      const h = state.size;
+
+      const zRot = degToRad(state.cylindrical.zRotationDeg);
+
+      const radius = 1.0;
+      const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
+      const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
+
+      const cameraDistance =
+        radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
+
+      const cameraPos = [radius + cameraDistance, 0.0, 0.0];
+      const target = [0.0, 0.0, 0.0];
+      const viewDir = subVec3(target, cameraPos);
+
+      const focalPx = 0.95 * Math.max(w, h);
+
+      const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
+
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+
+      const xCam = x - cx;
+      const yCam = -(y - cy);
+
+      let D = addVec3(
+        addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)),
+        scaleVec3(fwd, focalPx)
+      );
+
+      D = normalizeVec3(D);
+
+      const Cx = cameraPos[0];
+      const Cy = cameraPos[1];
+      const Cz = cameraPos[2];
+
+      const Dx = D[0];
+      const Dy = D[1];
+      const Dz = D[2];
+
+      const a = Dx * Dx + Dy * Dy;
+      const b = 2.0 * (Cx * Dx + Cy * Dy);
+      const c = Cx * Cx + Cy * Cy - radius * radius;
+
+      if (a <= 1e-12) return null;
+
+      const disc = b * b - 4.0 * a * c;
+      if (disc <= 0.0) return null;
+
+      const sqrtDisc = Math.sqrt(disc);
+
+      const t1 = (-b - sqrtDisc) / (2.0 * a);
+      const t2 = (-b + sqrtDisc) / (2.0 * a);
+
+      let t = Infinity;
+
+      if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
+      else if (t1 > 1e-6) t = t1;
+      else if (t2 > 1e-6) t = t2;
+
+      if (!Number.isFinite(t)) return null;
+
+      const Px = Cx + t * Dx;
+      const Py = Cy + t * Dy;
+      const Pz = Cz + t * Dz;
+
+      const theta = Math.atan2(Py, Px);
+
+      const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
+      const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
+
+      const Nx = Math.cos(theta);
+      const Ny = Math.sin(theta);
+      const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
+
+      if (!insideAngular || !insideVertical || !facing) {
+        return null;
+      }
+
+      const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
+      const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
+
+      return {
+        x: clamp(uNorm * (w - 1), 0, w - 1),
+        y: clamp(vNorm * (h - 1), 0, h - 1)
+      };
+    }
+
+    function numericalJacobianDisplayToSource(x, y) {
+      const eps = 1.0;
+
+      const px1 = mapDisplayToSource(x + eps, y);
+      const px0 = mapDisplayToSource(x - eps, y);
+      const py1 = mapDisplayToSource(x, y + eps);
+      const py0 = mapDisplayToSource(x, y - eps);
+
+      if (!px1 || !px0 || !py1 || !py0) {
+        return null;
+      }
+
+      const dsxDx = (px1.x - px0.x) / (2 * eps);
+      const dsyDx = (px1.y - px0.y) / (2 * eps);
+
+      const dsxDy = (py1.x - py0.x) / (2 * eps);
+      const dsyDy = (py1.y - py0.y) / (2 * eps);
+
+      return [
+        [dsxDx, dsxDy],
+        [dsyDx, dsyDy]
+      ];
+    }
+
+    function sourceToDisplayJacobianAt(x, y) {
+      const JdisplayToSource = numericalJacobianDisplayToSource(x, y);
+      if (!JdisplayToSource) return null;
+
+      return mat2Inv(JdisplayToSource);
+    }
+
+    function getTextureShiftVectorsSourcePx() {
+      const k = degToRad(state.texture.angleShiftDeg);
+
+      const U = [
+        0,
+        Math.round(state.texture.normShift)
+      ];
+
+      const V = [
+        Math.round(state.texture.normShift * Math.sin(k)),
+        Math.round(state.texture.normShift * Math.cos(k))
+      ];
+
+      return { U, V };
+    }
+
+    function getTheoreticalPeakPixels(acWidth, acHeight, displayX, displayY) {
+      const J = sourceToDisplayJacobianAt(displayX, displayY);
+
+      if (!J) return [];
+
+      const { U, V } = getTextureShiftVectorsSourcePx();
+
+      const JU = mat2MulVec(J, U);
+      const JV = mat2MulVec(J, V);
+      const JW = mat2MulVec(J, [U[0] - V[0], U[1] - V[1]]);
+
+      const cx = (acWidth - 1) / 2.0;
+      const cy = (acHeight - 1) / 2.0;
+
+      const vectors = [
+        { name: "+JU", vec: JU, color: "#ff3030" },
+        { name: "-JU", vec: [-JU[0], -JU[1]], color: "#ff3030" },
+
+        { name: "+JV", vec: JV, color: "#00ff60" },
+        { name: "-JV", vec: [-JV[0], -JV[1]], color: "#00ff60" },
+
+        { name: "+J(U-V)", vec: JW, color: "#fff000" },
+        { name: "-J(U-V)", vec: [-JW[0], -JW[1]], color: "#fff000" }
+      ];
+
+      return vectors.map((p) => ({
+        name: p.name,
+        x: cx + p.vec[0],
+        y: cy + p.vec[1],
+        color: p.color
+      }));
+    }
+
+    // =========================================================
+    // AUTOCORRELATION + PEAK DETECTION
     // =========================================================
     function extractPatchGrayResampled(imageData, cx, cy, patchSize, targetSize) {
       const out = new Float64Array(targetSize * targetSize);
       const half = patchSize / 2;
 
       let k = 0;
+
       for (let j = 0; j < targetSize; j++) {
         const v = (j + 0.5) / targetSize;
         const yy = cy - half + v * patchSize;
@@ -1069,14 +1447,17 @@
         for (let i = 0; i < targetSize; i++) {
           const u = (i + 0.5) / targetSize;
           const xx = cx - half + u * patchSize;
+
           out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
         }
       }
 
       let mean = 0;
+
       for (let i = 0; i < out.length; i++) {
         mean += out[i];
       }
+
       mean /= Math.max(out.length, 1);
 
       for (let i = 0; i < out.length; i++) {
@@ -1106,6 +1487,7 @@
 
               const a = grayPatch[y * n + x];
               const b = grayPatch[yy * n + xx];
+
               sum += a * b;
               energyA += a * a;
               energyB += b * b;
@@ -1130,6 +1512,7 @@
           const right = arr[y * w + clamp(x + 1, 0, w - 1)];
           const up = arr[clamp(y - 1, 0, h - 1) * w + x];
           const down = arr[clamp(y + 1, 0, h - 1) * w + x];
+
           out[y * w + x] = left + right + up + down - 4 * c;
         }
       }
@@ -1137,11 +1520,154 @@
       return out;
     }
 
+    function refinePeakSubpixel3x3(arr, w, h, x, y) {
+      if (x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) {
+        return {
+          x,
+          y,
+          value: arr[y * w + x]
+        };
+      }
+
+      const c = arr[y * w + x];
+
+      const lx = arr[y * w + (x - 1)];
+      const rx = arr[y * w + (x + 1)];
+
+      const uy = arr[(y - 1) * w + x];
+      const dy = arr[(y + 1) * w + x];
+
+      const denomX = lx - 2 * c + rx;
+      const denomY = uy - 2 * c + dy;
+
+      let offX = 0;
+      let offY = 0;
+
+      if (Math.abs(denomX) > 1e-12) {
+        offX = 0.5 * (lx - rx) / denomX;
+      }
+
+      if (Math.abs(denomY) > 1e-12) {
+        offY = 0.5 * (uy - dy) / denomY;
+      }
+
+      offX = clamp(offX, -1, 1);
+      offY = clamp(offY, -1, 1);
+
+      return {
+        x: x + offX,
+        y: y + offY,
+        value: c
+      };
+    }
+
+    function findLocalPeakNear(arr, w, h, x0, y0, radius) {
+      let best = null;
+      let bestVal = -Infinity;
+
+      const xi0 = Math.round(x0);
+      const yi0 = Math.round(y0);
+
+      for (let y = yi0 - radius; y <= yi0 + radius; y++) {
+        if (y < 1 || y >= h - 1) continue;
+
+        for (let x = xi0 - radius; x <= xi0 + radius; x++) {
+          if (x < 1 || x >= w - 1) continue;
+
+          const dx = x - x0;
+          const dy = y - y0;
+
+          if (dx * dx + dy * dy > radius * radius) continue;
+
+          const idx = y * w + x;
+          const v = arr[idx];
+
+          if (v > bestVal) {
+            bestVal = v;
+            best = { x, y, value: v };
+          }
+        }
+      }
+
+      if (!best) return null;
+
+      return refinePeakSubpixel3x3(arr, w, h, best.x, best.y);
+    }
+
+    function detectPeaksAroundTheoretical(ac, w, h, theoreticalPeaks) {
+      const found = [];
+
+      theoreticalPeaks.forEach((p) => {
+        if (p.x < 0 || p.x >= w || p.y < 0 || p.y >= h) return;
+
+        const peak = findLocalPeakNear(
+          ac,
+          w,
+          h,
+          p.x,
+          p.y,
+          state.peakSearchRadius
+        );
+
+        if (!peak) return;
+
+        found.push({
+          name: `F${p.name}`,
+          x: peak.x,
+          y: peak.y,
+          value: peak.value,
+          color: p.color
+        });
+      });
+
+      return found;
+    }
+
+    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, acW, acH) {
+      if (!acorrCtx || !acorrCanvas) return;
+
+      const sx = acorrCanvas.width / acW;
+      const sy = acorrCanvas.height / acH;
+
+      const cx = ((acW - 1) / 2.0) * sx;
+      const cy = ((acH - 1) / 2.0) * sy;
+
+      drawCircleCanvas(acorrCtx, cx, cy, 5, "#00ffff", 2);
+      drawTextCanvas(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
+
+      theoreticalPeaks.forEach((p) => {
+        const px = p.x * sx;
+        const py = p.y * sy;
+
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
+          return;
+        }
+
+        drawCrossSubpixel(acorrCtx, px, py, p.color, 7, 2);
+        drawTextCanvas(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
+      });
+
+      foundPeaks.forEach((p) => {
+        const px = p.x * sx;
+        const py = p.y * sy;
+
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
+          return;
+        }
+
+        drawCircleCanvas(acorrCtx, px, py, 6, p.color, 2);
+        drawTextCanvas(acorrCtx, p.name, px + 7, py - 7, p.color);
+      });
+    }
+
     function renderAutocorrelationAt(x, y) {
-      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
+      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) {
+        return;
+      }
 
       const patchSize = state.patchSize;
       const computeSize = Math.min(state.previewComputeSize, patchSize);
+
       const cx = x;
       const cy = y;
 
@@ -1174,6 +1700,7 @@
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = computeSize;
       tempCanvas.height = computeSize;
+
       const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
       tempCtx.putImageData(img, 0, 0);
 
@@ -1181,7 +1708,7 @@
       acorrCtx.imageSmoothingEnabled = false;
       acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
 
-      drawCross(
+      drawCrossSubpixel(
         acorrCtx,
         acorrCanvas.width / 2,
         acorrCanvas.height / 2,
@@ -1189,6 +1716,29 @@
         5,
         1
       );
+
+      if (state.peaksEnabled) {
+        const theoreticalPeaks = getTheoreticalPeakPixels(
+          computeSize,
+          computeSize,
+          cx,
+          cy
+        );
+
+        const foundPeaks = detectPeaksAroundTheoretical(
+          ac,
+          computeSize,
+          computeSize,
+          theoreticalPeaks
+        );
+
+        drawPeakOverlayOnPreview(
+          theoreticalPeaks,
+          foundPeaks,
+          computeSize,
+          computeSize
+        );
+      }
 
       if (acorrModeLabel) {
         acorrModeLabel.textContent =
@@ -1214,9 +1764,12 @@
 
       state.patchSize = 90;
       state.previewContrast = 2.2;
+
       state.displayMode = "autocorr";
+      state.peaksEnabled = false;
 
       state.projectionIndex = 0;
+
       state.lockedPatch = false;
       state.mouseX = state.size / 2;
       state.mouseY = state.size / 2;
@@ -1254,6 +1807,7 @@
 
     function cycleProjectionMode() {
       state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
+
       refreshProjectionPanels();
       applyCurrentProjection();
     }
@@ -1281,7 +1835,13 @@
         }
 
         state.autocorrEnabled = !state.autocorrEnabled;
+
+        if (!state.autocorrEnabled) {
+          state.peaksEnabled = false;
+        }
+
         refreshAutocorrStateUI();
+        refreshPeakStateUI();
 
         if (state.autocorrEnabled) {
           const p = getActivePatchCenter();
@@ -1289,6 +1849,23 @@
         } else {
           redrawMainCanvas();
         }
+      });
+    }
+
+    if (btnDetectPeaks) {
+      btnDetectPeaks.addEventListener("click", () => {
+        state.peaksEnabled = !state.peaksEnabled;
+
+        if (state.peaksEnabled && !state.autocorrEnabled) {
+          state.autocorrEnabled = true;
+          state.displayMode = "autocorr";
+          refreshAutocorrStateUI();
+        }
+
+        refreshPeakStateUI();
+
+        const p = getActivePatchCenter();
+        renderAutocorrelationAt(p.x, p.y);
       });
     }
 
@@ -1302,6 +1879,7 @@
       contrastSlider.addEventListener("input", () => {
         state.previewContrast = parseFloat(contrastSlider.value);
         refreshControlLabels();
+
         if (state.autocorrEnabled) {
           schedulePreviewRender();
         }
@@ -1323,6 +1901,7 @@
 
     [texOccupancy, texDilation, texAngle, texShift, texBlur].forEach((el) => {
       if (!el) return;
+
       el.addEventListener("input", () => {
         updateStateFromControls();
         renderGeneratedTexture();
@@ -1331,6 +1910,7 @@
 
     controlIds.forEach((id) => {
       if (!controls[id]) return;
+
       controls[id].addEventListener("input", () => {
         updateStateFromControls();
         applyCurrentProjection();
@@ -1339,6 +1919,7 @@
 
     canvas.addEventListener("mousemove", (event) => {
       const pos = getCanvasMousePos(event, canvas);
+
       state.mouseX = pos.x;
       state.mouseY = pos.y;
 
@@ -1365,6 +1946,7 @@
             state.lockedPatchX,
             state.lockedPatchY
           );
+
           renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
         } else {
           updateAutocorrPreviewPosition(event.clientX, event.clientY);
@@ -1377,6 +1959,7 @@
       if (!state.autocorrEnabled) return;
 
       event.preventDefault();
+
       state.lockedPatch = false;
 
       updateAutocorrPreviewPosition(event.clientX, event.clientY);
@@ -1388,6 +1971,7 @@
       if (!state.autocorrEnabled) return;
 
       const pos = getCanvasMousePos(event, canvas);
+
       state.lockedPatch = true;
       state.lockedPatchX = pos.x;
       state.lockedPatchY = pos.y;
@@ -1426,7 +2010,11 @@
         }
 
         state.patchSize = next;
-        if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
+
+        if (patchSizeControl) {
+          patchSizeControl.value = String(state.patchSize);
+        }
+
         refreshControlLabels();
         schedulePreviewRender();
       },
@@ -1444,12 +2032,17 @@
         updatePreviewContrast(-0.1);
       } else if (event.key === "s" || event.key === "S") {
         event.preventDefault();
-        state.displayMode = state.displayMode === "autocorr" ? "laplacian" : "autocorr";
+
+        state.displayMode =
+          state.displayMode === "autocorr" ? "laplacian" : "autocorr";
+
         refreshAutocorrStateUI();
         schedulePreviewRender();
       } else if (event.key === "Escape") {
         event.preventDefault();
+
         state.lockedPatch = false;
+
         redrawMainCanvas();
         schedulePreviewRender();
       }
@@ -1465,6 +2058,7 @@
     // INIT
     // =========================================================
     syncControlsFromState();
+    refreshPeakStateUI();
     renderGeneratedTexture();
   });
 })();

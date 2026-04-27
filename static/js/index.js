@@ -62,13 +62,14 @@
     const btnProjection = document.getElementById("btn-change-projection");
     const btnAutocorr = document.getElementById("btn-toggle-autocorr");
     const btnResetParams = document.getElementById("btn-reset-params");
-    const btnDetectPeaks = document.getElementById("btn-detect-peaks");
+
+    let btnDetectPeaks = document.getElementById("btn-detect-peaks");
+    let peaksStateLabel = document.getElementById("peaks-state-label");
 
     const projectionModeLabel = document.getElementById("projection-mode-label");
     const patchSizeLabel = document.getElementById("patch-size-label");
     const patchSizeInline = document.getElementById("patch-size-inline");
     const autocorrStateLabel = document.getElementById("autocorr-state-label");
-    const peaksStateLabel = document.getElementById("peaks-state-label");
     const acorrModeLabel = document.getElementById("acorr-mode-label");
 
     const contrastSlider = document.getElementById("acorr-contrast");
@@ -156,34 +157,57 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
-
       patchSize: 90,
       previewContrast: 2.2,
-
       autocorrEnabled: false,
       peaksEnabled: false,
-
       projectionModes: ["Affine", "Perspective", "Cylindrical"],
       projectionIndex: 0,
-
       mouseX: 450,
       mouseY: 450,
-
       lockedPatch: false,
       lockedPatchX: 450,
       lockedPatchY: 450,
-
       displayMode: "autocorr",
-
       texture: { ...DEFAULTS.texture },
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
-
       previewComputeSize: 64,
       centerBlendRadius: 6,
 
-      peakSearchRadius: 8
+      // ---------------------------------------------------------
+      // Equivalent JS des kwargs de find_hexagon / stable patch.
+      // Tu peux modifier ces valeurs directement ici.
+      // ---------------------------------------------------------
+      peakDetection: {
+        // Détection des maxima locaux dans l'autocorr
+        k: 80,
+        nmsSize: 9,
+        excludeCenterRadius: 7.0,
+        minSeparation: 3.0,
+
+        // Sélection du meilleur couple (u, v)
+        energyHalfwin: 2.0,
+        minDist: 3.0,
+        antipodalTol: 2.0,
+        angleMinDeg: 12.0,
+        wExcludeCenterRadius: 7.0,
+
+        // Raffinement sous-pixelique simple 3x3
+        refineSubpixel: true,
+
+        // Si true, lance une version multi-échelles inspirée de
+        // find_min_stable_patch_size_centered. Plus lent.
+        useStablePatch: false,
+        minPs: 40,
+        maxPs: 140,
+        step: 4,
+        stableSeqLen: 3,
+        stableTol: 1.0
+      },
+
+      lastDetection: null
     };
 
     let canvasHovered = false;
@@ -196,6 +220,39 @@
     state.displayedCanvas.width = state.size;
     state.displayedCanvas.height = state.size;
     state.displayedCtx = state.displayedCanvas.getContext("2d", { willReadFrequently: true });
+
+    // =========================================================
+    // AUTO-CREATE PEAK BUTTON / STATUS IF MISSING IN HTML
+    // =========================================================
+    function ensurePeakControlsExist() {
+      if (!btnDetectPeaks) {
+        const toolbar = document.querySelector(".interactive-toolbar");
+        if (toolbar) {
+          btnDetectPeaks = document.createElement("button");
+          btnDetectPeaks.id = "btn-detect-peaks";
+          btnDetectPeaks.className = "button is-success is-rounded";
+          btnDetectPeaks.innerHTML = '<span class="icon"><i class="fas fa-crosshairs"></i></span><span>Detect Peaks</span>';
+          if (btnAutocorr && btnAutocorr.nextSibling) {
+            toolbar.insertBefore(btnDetectPeaks, btnAutocorr.nextSibling);
+          } else {
+            toolbar.appendChild(btnDetectPeaks);
+          }
+        }
+      }
+
+      if (!peaksStateLabel) {
+        const status = document.querySelector(".interactive-status");
+        if (status) {
+          const pill = document.createElement("span");
+          pill.className = "status-pill";
+          pill.innerHTML = 'Peaks: <span id="peaks-state-label">OFF</span>';
+          status.appendChild(pill);
+          peaksStateLabel = document.getElementById("peaks-state-label");
+        }
+      }
+    }
+
+    ensurePeakControlsExist();
 
     // =========================================================
     // UTILS
@@ -211,17 +268,12 @@
     function rotate2D(x, y, angleRad) {
       const c = Math.cos(angleRad);
       const s = Math.sin(angleRad);
-      return {
-        x: c * x - s * y,
-        y: s * x + c * y
-      };
+      return { x: c * x - s * y, y: s * x + c * y };
     }
 
     function normalizeVec3(v, eps = 1e-12) {
       const n = Math.hypot(v[0], v[1], v[2]);
-      if (n < eps) {
-        throw new Error("Zero vector cannot be normalized");
-      }
+      if (n < eps) throw new Error("Zero vector cannot be normalized");
       return [v[0] / n, v[1] / n, v[2] / n];
     }
 
@@ -252,10 +304,7 @@
     function buildCameraBasisJS(viewDir, worldUp = [0, 0, 1], roll = 0) {
       let fwd = normalizeVec3(viewDir);
       let wu = normalizeVec3(worldUp);
-
-      if (Math.abs(dotVec3(fwd, wu)) > 0.98) {
-        wu = [0, 1, 0];
-      }
+      if (Math.abs(dotVec3(fwd, wu)) > 0.98) wu = [0, 1, 0];
 
       let right = normalizeVec3(crossVec3(fwd, wu));
       let up = normalizeVec3(crossVec3(right, fwd));
@@ -263,21 +312,16 @@
       if (Math.abs(roll) > 1e-12) {
         const cr = Math.cos(roll);
         const sr = Math.sin(roll);
-
         const right2 = addVec3(scaleVec3(right, cr), scaleVec3(up, sr));
         const up2 = addVec3(scaleVec3(right, -sr), scaleVec3(up, cr));
-
         right = right2;
         up = up2;
       }
-
       return { right, up, fwd };
     }
 
     function getActivePatchCenter() {
-      if (state.lockedPatch) {
-        return { x: state.lockedPatchX, y: state.lockedPatchY };
-      }
+      if (state.lockedPatch) return { x: state.lockedPatchX, y: state.lockedPatchY };
       return { x: state.mouseX, y: state.mouseY };
     }
 
@@ -285,26 +329,19 @@
       const rect = targetCanvas.getBoundingClientRect();
       const sx = targetCanvas.width / rect.width;
       const sy = targetCanvas.height / rect.height;
-
-      return {
-        x: (event.clientX - rect.left) * sx,
-        y: (event.clientY - rect.top) * sy
-      };
+      return { x: (event.clientX - rect.left) * sx, y: (event.clientY - rect.top) * sy };
     }
 
     function createImageDataFromGray(gray, w, h) {
       const img = new ImageData(w, h);
-
       for (let i = 0; i < gray.length; i++) {
         const v = gray[i];
         const idx = i * 4;
-
         img.data[idx] = v;
         img.data[idx + 1] = v;
         img.data[idx + 2] = v;
         img.data[idx + 3] = 255;
       }
-
       return img;
     }
 
@@ -312,16 +349,12 @@
       const w = imageData.width;
       const h = imageData.height;
       const data = imageData.data;
-
-      if (x < 0 || x > w - 1 || y < 0 || y > h - 1) {
-        return background;
-      }
+      if (x < 0 || x > w - 1 || y < 0 || y > h - 1) return background;
 
       const x0 = Math.floor(x);
       const y0 = Math.floor(y);
       const x1 = Math.min(x0 + 1, w - 1);
       const y1 = Math.min(y0 + 1, h - 1);
-
       const ax = x - x0;
       const ay = y - y0;
 
@@ -334,70 +367,17 @@
       const g10 = grayAt(x1, y0);
       const g01 = grayAt(x0, y1);
       const g11 = grayAt(x1, y1);
-
       const g0 = g00 * (1 - ax) + g10 * ax;
       const g1 = g01 * (1 - ax) + g11 * ax;
-
       return g0 * (1 - ay) + g1 * ay;
     }
 
     function setGrayPixel(dst, pixelIndex, gray) {
       const v = clamp(Math.round(gray), 0, 255);
-
       dst[pixelIndex] = v;
       dst[pixelIndex + 1] = v;
       dst[pixelIndex + 2] = v;
       dst[pixelIndex + 3] = 255;
-    }
-
-    function drawCross(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
-      const xx = Math.floor(x) + 0.5;
-      const yy = Math.floor(y) + 0.5;
-
-      targetCtx.save();
-      targetCtx.strokeStyle = color;
-      targetCtx.lineWidth = lineWidth;
-      targetCtx.beginPath();
-      targetCtx.moveTo(xx - size, yy);
-      targetCtx.lineTo(xx + size, yy);
-      targetCtx.moveTo(xx, yy - size);
-      targetCtx.lineTo(xx, yy + size);
-      targetCtx.stroke();
-      targetCtx.restore();
-    }
-
-    function drawCrossSubpixel(targetCtx, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
-      targetCtx.save();
-      targetCtx.strokeStyle = color;
-      targetCtx.lineWidth = lineWidth;
-      targetCtx.beginPath();
-      targetCtx.moveTo(x - size, y);
-      targetCtx.lineTo(x + size, y);
-      targetCtx.moveTo(x, y - size);
-      targetCtx.lineTo(x, y + size);
-      targetCtx.stroke();
-      targetCtx.restore();
-    }
-
-    function drawCircleCanvas(targetCtx, x, y, radius, color, lineWidth = 2) {
-      targetCtx.save();
-      targetCtx.strokeStyle = color;
-      targetCtx.lineWidth = lineWidth;
-      targetCtx.beginPath();
-      targetCtx.arc(x, y, radius, 0, 2 * Math.PI);
-      targetCtx.stroke();
-      targetCtx.restore();
-    }
-
-    function drawTextCanvas(targetCtx, text, x, y, color) {
-      targetCtx.save();
-      targetCtx.font = "bold 11px Inter, Arial, sans-serif";
-      targetCtx.fillStyle = color;
-      targetCtx.strokeStyle = "rgba(0, 0, 0, 0.78)";
-      targetCtx.lineWidth = 3;
-      targetCtx.strokeText(text, x, y);
-      targetCtx.fillText(text, x, y);
-      targetCtx.restore();
     }
 
     function percentile(values, p) {
@@ -414,68 +394,39 @@
 
     function robustNormalizeFloat(arr, lowP = 0.01, highP = 0.995) {
       const sorted = Array.from(arr).sort((a, b) => a - b);
-
       const lo = percentileSorted(sorted, lowP);
       const hi = percentileSorted(sorted, highP);
-
       const out = new Float64Array(arr.length);
-
-      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
-        return out;
-      }
-
+      if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return out;
       const range = hi - lo;
-
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = clamp((arr[i] - lo) / range, 0, 1);
-      }
-
+      for (let i = 0; i < arr.length; i++) out[i] = clamp((arr[i] - lo) / range, 0, 1);
       return out;
     }
 
     function absArray(arr) {
       const out = new Float64Array(arr.length);
-
-      for (let i = 0; i < arr.length; i++) {
-        out[i] = Math.abs(arr[i]);
-      }
-
+      for (let i = 0; i < arr.length; i++) out[i] = Math.abs(arr[i]);
       return out;
     }
 
     function attenuateCenterDisk(arr, width, height, radius) {
-      if (radius <= 0) {
-        return new Float64Array(arr);
-      }
-
+      if (radius <= 0) return new Float64Array(arr);
       const out = new Float64Array(arr);
       const cx = (width - 1) / 2;
       const cy = (height - 1) / 2;
-
       const annulus = [];
       const rInner = radius;
       const rOuter = radius + 4;
-
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const dx = x - cx;
-          const dy = y - cy;
-          const d = Math.sqrt(dx * dx + dy * dy);
-
-          if (d > rInner && d <= rOuter) {
-            annulus.push(arr[y * width + x]);
-          }
+          const d = Math.hypot(x - cx, y - cy);
+          if (d > rInner && d <= rOuter) annulus.push(arr[y * width + x]);
         }
       }
-
       const median = annulus.length ? percentile(annulus, 0.5) : 0;
-
       for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
-          const dx = x - cx;
-          const dy = y - cy;
-          const d = Math.sqrt(dx * dx + dy * dy);
-
+          const d = Math.hypot(x - cx, y - cy);
           if (d <= radius) {
             const idx = y * width + x;
             const t = d / Math.max(radius, 1e-6);
@@ -484,145 +435,125 @@
           }
         }
       }
-
       return out;
     }
 
     function applyDisplayContrastRobust(arr, width, height, contrast, mode) {
       let work = new Float64Array(arr);
-
-      if (mode === "laplacian") {
-        work = absArray(work);
-      }
-
+      if (mode === "laplacian") work = absArray(work);
       work = attenuateCenterDisk(work, width, height, state.centerBlendRadius);
-
       const normalized = robustNormalizeFloat(
         work,
         mode === "laplacian" ? 0.03 : 0.01,
         mode === "laplacian" ? 0.998 : 0.995
       );
-
       const out = new Float64Array(normalized.length);
       const gamma = 1 / Math.max(contrast, 1e-6);
-
       for (let i = 0; i < normalized.length; i++) {
         out[i] = Math.pow(clamp(normalized[i], 0, 1), gamma);
       }
-
       return out;
     }
 
     function float01ToUint8(arr01) {
       const out = new Uint8ClampedArray(arr01.length);
-
-      for (let i = 0; i < arr01.length; i++) {
-        out[i] = clamp(Math.round(arr01[i] * 255), 0, 255);
-      }
-
+      for (let i = 0; i < arr01.length; i++) out[i] = clamp(Math.round(arr01[i] * 255), 0, 255);
       return out;
     }
 
     function updateAutocorrPreviewPosition(clientX, clientY) {
       if (!acorrPreview) return;
-
       const pad = 18;
       let left = clientX + pad;
       let top = clientY + pad;
-
       const rect = acorrPreview.getBoundingClientRect();
-
-      if (left + rect.width > window.innerWidth - 8) {
-        left = clientX - rect.width - pad;
-      }
-
-      if (top + rect.height > window.innerHeight - 8) {
-        top = clientY - rect.height - pad;
-      }
-
+      if (left + rect.width > window.innerWidth - 8) left = clientX - rect.width - pad;
+      if (top + rect.height > window.innerHeight - 8) top = clientY - rect.height - pad;
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
     }
 
     function updateAutocorrPreviewPositionFromCanvasPoint(x, y) {
       if (!acorrPreview || !canvas) return;
-
       const canvasRect = canvas.getBoundingClientRect();
       const clientX = canvasRect.left + (x / canvas.width) * canvasRect.width;
       const clientY = canvasRect.top + (y / canvas.height) * canvasRect.height;
-
       const pad = 18;
       const previewRect = acorrPreview.getBoundingClientRect();
-
       let left = clientX + pad;
       let top = clientY - previewRect.height * 0.35;
-
-      if (left + previewRect.width > window.innerWidth - 8) {
-        left = clientX - previewRect.width - pad;
-      }
-
-      if (top < 8) {
-        top = 8;
-      }
-
-      if (top + previewRect.height > window.innerHeight - 8) {
-        top = window.innerHeight - previewRect.height - 8;
-      }
-
+      if (left + previewRect.width > window.innerWidth - 8) left = clientX - previewRect.width - pad;
+      if (top < 8) top = 8;
+      if (top + previewRect.height > window.innerHeight - 8) top = window.innerHeight - previewRect.height - 8;
       acorrPreview.style.left = `${left}px`;
       acorrPreview.style.top = `${top}px`;
     }
 
-    function refreshPeakStateUI() {
-      if (peaksStateLabel) {
-        peaksStateLabel.textContent = state.peaksEnabled ? "ON" : "OFF";
-      }
+    function drawCross(ctx2, x, y, color = "#00ffff", size = 5, lineWidth = 1) {
+      ctx2.save();
+      ctx2.strokeStyle = color;
+      ctx2.lineWidth = lineWidth;
+      ctx2.beginPath();
+      ctx2.moveTo(x - size, y);
+      ctx2.lineTo(x + size, y);
+      ctx2.moveTo(x, y - size);
+      ctx2.lineTo(x, y + size);
+      ctx2.stroke();
+      ctx2.restore();
+    }
 
+    function drawCircle(ctx2, x, y, radius, color, lineWidth = 2) {
+      ctx2.save();
+      ctx2.strokeStyle = color;
+      ctx2.lineWidth = lineWidth;
+      ctx2.beginPath();
+      ctx2.arc(x, y, radius, 0, 2 * Math.PI);
+      ctx2.stroke();
+      ctx2.restore();
+    }
+
+    function drawText(ctx2, text, x, y, color) {
+      ctx2.save();
+      ctx2.font = "bold 11px Inter, Arial, sans-serif";
+      ctx2.fillStyle = color;
+      ctx2.strokeStyle = "rgba(0, 0, 0, 0.78)";
+      ctx2.lineWidth = 3;
+      ctx2.strokeText(text, x, y);
+      ctx2.fillText(text, x, y);
+      ctx2.restore();
+    }
+
+    // =========================================================
+    // UI REFRESH
+    // =========================================================
+    function refreshPeakStateUI() {
+      if (peaksStateLabel) peaksStateLabel.textContent = state.peaksEnabled ? "ON" : "OFF";
       if (btnDetectPeaks) {
         btnDetectPeaks.classList.toggle("is-success", !state.peaksEnabled);
         btnDetectPeaks.classList.toggle("is-danger", state.peaksEnabled);
-
         const textSpan = btnDetectPeaks.querySelector("span:last-child");
-        if (textSpan) {
-          textSpan.textContent = state.peaksEnabled ? "Hide Peaks" : "Detect Peaks";
-        }
+        if (textSpan) textSpan.textContent = state.peaksEnabled ? "Hide Peaks" : "Detect Peaks";
       }
     }
 
     function refreshAutocorrStateUI() {
-      if (autocorrStateLabel) {
-        autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
-      }
-
-      if (acorrPreview) {
-        acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
-      }
-
+      if (autocorrStateLabel) autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
+      if (acorrPreview) acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
       if (acorrModeLabel) {
-        acorrModeLabel.textContent =
-          state.displayMode === "laplacian"
-            ? "Laplacian of Autocorrelation"
-            : "Autocorrelation";
+        acorrModeLabel.textContent = state.displayMode === "laplacian"
+          ? "Laplacian of Autocorrelation"
+          : "Autocorrelation";
       }
-
-      if (patchSizeLabel) {
-        patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
-      }
-
-      if (patchSizeInline) {
-        patchSizeInline.textContent = state.patchSize;
-      }
-
+      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
+      if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
       refreshPeakStateUI();
     }
 
     function refreshProjectionPanels() {
       const mode = state.projectionModes[state.projectionIndex];
-
       if (panelAffine) panelAffine.classList.toggle("is-active", mode === "Affine");
       if (panelPerspective) panelPerspective.classList.toggle("is-active", mode === "Perspective");
       if (panelCylindrical) panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
-
       if (projectionModeLabel) projectionModeLabel.textContent = mode;
     }
 
@@ -653,7 +584,6 @@
       if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
-
       refreshPeakStateUI();
     }
 
@@ -719,16 +649,10 @@
     function schedulePreviewRender() {
       if (!state.autocorrEnabled || !state.displayedImageData) return;
       if (rafPreview !== null) return;
-
       rafPreview = window.requestAnimationFrame(() => {
         rafPreview = null;
-
         const p = getActivePatchCenter();
-
-        if (state.lockedPatch) {
-          updateAutocorrPreviewPositionFromCanvasPoint(p.x, p.y);
-        }
-
+        if (state.lockedPatch) updateAutocorrPreviewPositionFromCanvasPoint(p.x, p.y);
         renderAutocorrelationAt(p.x, p.y);
       });
     }
@@ -738,151 +662,101 @@
     // =========================================================
     function applyBinaryDilation(gray, w, h, radius) {
       const out = new Uint8ClampedArray(w * h);
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           let makeBlack = false;
-
           for (let dy = -radius; dy <= radius && !makeBlack; dy++) {
             for (let dx = -radius; dx <= radius; dx++) {
               const xx = x + dx;
               const yy = y + dy;
-
               if (xx < 0 || xx >= w || yy < 0 || yy >= h) continue;
-
-              if (gray[yy * w + xx] === 0) {
-                makeBlack = true;
-                break;
-              }
+              if (gray[yy * w + xx] === 0) { makeBlack = true; break; }
             }
           }
-
           out[y * w + x] = makeBlack ? 0 : 255;
         }
       }
-
       return out;
     }
 
     function generateWhiteNoiseAndShifts(w, h, shift1, shift2) {
       const base = new Float64Array(w * h);
-
-      for (let i = 0; i < base.length; i++) {
-        base[i] = Math.random() * 2 - 1;
-      }
-
+      for (let i = 0; i < base.length; i++) base[i] = Math.random() * 2 - 1;
       const out = new Float64Array(w * h);
-
       function wrappedIndex(x, y) {
         let xx = x % w;
         let yy = y % h;
-
         if (xx < 0) xx += w;
         if (yy < 0) yy += h;
-
         return yy * w + xx;
       }
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const idx = y * w + x;
           const idx1 = wrappedIndex(x - shift1.x, y - shift1.y);
           const idx2 = wrappedIndex(x - shift2.x, y - shift2.y);
-
           out[idx] = base[idx] + base[idx1] + base[idx2];
         }
       }
-
       return out;
     }
 
     function gaussianKernel1D(sigma) {
-      if (sigma <= 0) {
-        return new Float64Array([1]);
-      }
-
+      if (sigma <= 0) return new Float64Array([1]);
       const radius = Math.max(1, Math.ceil(3 * sigma));
       const size = 2 * radius + 1;
       const kernel = new Float64Array(size);
       const denom = 2 * sigma * sigma;
-
       let sum = 0;
-
       for (let i = -radius; i <= radius; i++) {
         const v = Math.exp(-(i * i) / denom);
         kernel[i + radius] = v;
         sum += v;
       }
-
-      for (let i = 0; i < size; i++) {
-        kernel[i] /= sum;
-      }
-
+      for (let i = 0; i < size; i++) kernel[i] /= sum;
       return kernel;
     }
 
     function blurGraySeparable(gray, w, h, sigma) {
-      if (sigma <= 0) {
-        return new Uint8ClampedArray(gray);
-      }
-
+      if (sigma <= 0) return new Uint8ClampedArray(gray);
       const kernel = gaussianKernel1D(sigma);
       const radius = Math.floor(kernel.length / 2);
-
       const temp = new Float64Array(w * h);
       const out = new Uint8ClampedArray(w * h);
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           let sum = 0;
-
           for (let k = -radius; k <= radius; k++) {
             const xx = clamp(x + k, 0, w - 1);
             sum += gray[y * w + xx] * kernel[k + radius];
           }
-
           temp[y * w + x] = sum;
         }
       }
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           let sum = 0;
-
           for (let k = -radius; k <= radius; k++) {
             const yy = clamp(y + k, 0, h - 1);
             sum += temp[yy * w + x] * kernel[k + radius];
           }
-
           out[y * w + x] = clamp(Math.round(sum), 0, 255);
         }
       }
-
       return out;
     }
 
     function genRandomBinaryTexture(w, h, dilationSize, occupancy, angleShiftDeg, normShift, blurSigma) {
       const k = degToRad(angleShiftDeg);
-
-      const shift1 = {
-        x: 0,
-        y: Math.round(normShift)
-      };
-
+      const shift1 = { x: 0, y: Math.round(normShift) };
       const shift2 = {
         x: Math.round(normShift * Math.sin(k)),
         y: Math.round(normShift * Math.cos(k))
       };
-
       const combined = generateWhiteNoiseAndShifts(w, h, shift1, shift2);
       const thr = percentile(combined, occupancy);
-
       const binary = new Uint8ClampedArray(w * h);
-
-      for (let i = 0; i < combined.length; i++) {
-        binary[i] = combined[i] <= thr ? 0 : 255;
-      }
-
+      for (let i = 0; i < combined.length; i++) binary[i] = combined[i] <= thr ? 0 : 255;
       const dilated = applyBinaryDilation(binary, w, h, dilationSize);
       return blurGraySeparable(dilated, w, h, blurSigma);
     }
@@ -890,22 +764,17 @@
     function renderGeneratedTexture() {
       const w = state.size;
       const h = state.size;
-
       const gray = genRandomBinaryTexture(
-        w,
-        h,
+        w, h,
         state.texture.dilation,
         state.texture.occupancy,
         state.texture.angleShiftDeg,
         state.texture.normShift,
         state.texture.blurSigma
       );
-
       const img = createImageDataFromGray(gray, w, h);
-
       state.sourceImageData = img;
       state.sourceCtx.putImageData(img, 0, 0);
-
       applyCurrentProjection();
     }
 
@@ -916,21 +785,17 @@
       const tmpCanvas = document.createElement("canvas");
       tmpCanvas.width = imageData.width;
       tmpCanvas.height = imageData.height;
-
       const tctx = tmpCanvas.getContext("2d", { willReadFrequently: true });
       tctx.putImageData(imageData, 0, 0);
 
       const outCanvas = document.createElement("canvas");
       outCanvas.width = imageData.width;
       outCanvas.height = imageData.height;
-
       const octx = outCanvas.getContext("2d", { willReadFrequently: true });
       octx.imageSmoothingEnabled = true;
       octx.imageSmoothingQuality = "high";
-
       octx.fillStyle = "white";
       octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-
       octx.save();
       octx.translate(outCanvas.width / 2, outCanvas.height / 2);
       octx.rotate(degToRad(state.affine.rotationDeg));
@@ -944,195 +809,132 @@
       );
       octx.drawImage(tmpCanvas, -outCanvas.width / 2, -outCanvas.height / 2);
       octx.restore();
-
       return octx.getImageData(0, 0, outCanvas.width, outCanvas.height);
     }
 
     function applyPerspectiveProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-
       const out = new ImageData(w, h);
       const dst = out.data;
-
       const cx = w / 2;
       const cy = h / 2;
-
       const tiltX = state.perspective.tiltX;
       const tiltY = state.perspective.tiltY;
       const focalScale = Math.max(0.05, state.perspective.focalScale);
       const zRot = degToRad(state.perspective.zRotationDeg);
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const xn = (x - cx) / cx;
           const yn = (y - cy) / cy;
-
           const p = rotate2D(xn, yn, -zRot);
           const xr = p.x;
           const yr = p.y;
-
           const denomX = 1 + tiltX * yr;
           const denomY = 1 + tiltY * xr;
-
           const srcXn = (xr / focalScale) / denomX;
           const srcYn = (yr / focalScale) / denomY;
-
           const sx = srcXn * cx + cx;
           const sy = srcYn * cy + cy;
-
           const di = (y * w + x) * 4;
           const gray = sampleGrayBilinear(imageData, sx, sy, 255);
-
           setGrayPixel(dst, di, gray);
         }
       }
-
       return out;
     }
 
     function applyCylindricalProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
-
       const out = new ImageData(w, h);
       const dst = out.data;
-
       const zRot = degToRad(state.cylindrical.zRotationDeg);
-
       const radius = 1.0;
       const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
       const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-
-      const cameraDistance =
-        radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
-
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
       const cameraPos = [radius + cameraDistance, 0.0, 0.0];
       const target = [0.0, 0.0, 0.0];
       const viewDir = subVec3(target, cameraPos);
-
       const focalPx = 0.95 * Math.max(w, h);
-
       const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
-
       const cx = (w - 1) / 2;
       const cy = (h - 1) / 2;
-
       const Cx = cameraPos[0];
       const Cy = cameraPos[1];
       const Cz = cameraPos[2];
-
       for (let y = 0; y < h; y++) {
         const yCam = -(y - cy);
-
         for (let x = 0; x < w; x++) {
           const xCam = x - cx;
-
-          let D = addVec3(
-            addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)),
-            scaleVec3(fwd, focalPx)
-          );
-
+          let D = addVec3(addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)), scaleVec3(fwd, focalPx));
           D = normalizeVec3(D);
-
           const Dx = D[0];
           const Dy = D[1];
           const Dz = D[2];
-
           const a = Dx * Dx + Dy * Dy;
           const b = 2.0 * (Cx * Dx + Cy * Dy);
           const c = Cx * Cx + Cy * Cy - radius * radius;
-
           let gray = 255;
-
           if (a > 1e-12) {
             const disc = b * b - 4.0 * a * c;
-
             if (disc > 0.0) {
               const sqrtDisc = Math.sqrt(disc);
               const t1 = (-b - sqrtDisc) / (2.0 * a);
               const t2 = (-b + sqrtDisc) / (2.0 * a);
-
               let t = Infinity;
-
               if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
               else if (t1 > 1e-6) t = t1;
               else if (t2 > 1e-6) t = t2;
-
               if (Number.isFinite(t)) {
                 const Px = Cx + t * Dx;
                 const Py = Cy + t * Dy;
                 const Pz = Cz + t * Dz;
-
                 const theta = Math.atan2(Py, Px);
-
                 const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
                 const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
-
                 const Nx = Math.cos(theta);
                 const Ny = Math.sin(theta);
                 const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
-
                 if (insideAngular && insideVertical && facing) {
                   const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
                   const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
-
                   const sx = clamp(uNorm * (w - 1), 0, w - 1);
                   const sy = clamp(vNorm * (h - 1), 0, h - 1);
-
                   gray = sampleGrayBilinear(imageData, sx, sy, 255);
                 }
               }
             }
           }
-
           const di = (y * w + x) * 4;
           setGrayPixel(dst, di, gray);
         }
       }
-
       return out;
     }
 
     function applyCurrentProjection() {
       if (!state.sourceImageData) return;
-
       const mode = state.projectionModes[state.projectionIndex];
-
       let result;
-
-      if (mode === "Affine") {
-        result = applyAffineProjection(state.sourceImageData);
-      } else if (mode === "Perspective") {
-        result = applyPerspectiveProjection(state.sourceImageData);
-      } else {
-        result = applyCylindricalProjection(state.sourceImageData);
-      }
-
+      if (mode === "Affine") result = applyAffineProjection(state.sourceImageData);
+      else if (mode === "Perspective") result = applyPerspectiveProjection(state.sourceImageData);
+      else result = applyCylindricalProjection(state.sourceImageData);
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
-
       redrawMainCanvas();
-
-      if (state.autocorrEnabled) {
-        schedulePreviewRender();
-      }
+      if (state.autocorrEnabled) schedulePreviewRender();
     }
 
     function redrawMainCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (state.displayedImageData) {
-        ctx.putImageData(state.displayedImageData, 0, 0);
-      }
-
+      if (state.displayedImageData) ctx.putImageData(state.displayedImageData, 0, 0);
       if (state.autocorrEnabled) {
         const half = Math.floor(state.patchSize / 2);
         const p = getActivePatchCenter();
-
         const x = Math.round(p.x) - half;
         const y = Math.round(p.y) - half;
-
         ctx.save();
         ctx.strokeStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
         ctx.lineWidth = state.lockedPatch ? 3 : 2;
@@ -1145,366 +947,214 @@
     // LOCAL GEOMETRY FOR THEORETICAL PEAKS
     // =========================================================
     function mat2MulVec(M, v) {
-      return [
-        M[0][0] * v[0] + M[0][1] * v[1],
-        M[1][0] * v[0] + M[1][1] * v[1]
-      ];
+      return [M[0][0] * v[0] + M[0][1] * v[1], M[1][0] * v[0] + M[1][1] * v[1]];
     }
 
     function mat2Inv(M, eps = 1e-12) {
-      const a = M[0][0];
-      const b = M[0][1];
-      const c = M[1][0];
-      const d = M[1][1];
-
+      const a = M[0][0], b = M[0][1], c = M[1][0], d = M[1][1];
       const det = a * d - b * c;
-
       if (Math.abs(det) < eps) return null;
-
-      return [
-        [d / det, -b / det],
-        [-c / det, a / det]
-      ];
+      return [[d / det, -b / det], [-c / det, a / det]];
     }
 
     function mapDisplayToSource(x, y) {
       const mode = state.projectionModes[state.projectionIndex];
-
-      if (mode === "Affine") {
-        return mapDisplayToSourceAffine(x, y);
-      }
-
-      if (mode === "Perspective") {
-        return mapDisplayToSourcePerspective(x, y);
-      }
-
+      if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
+      if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
       return mapDisplayToSourceCylindrical(x, y);
     }
 
     function mapDisplayToSourceAffine(x, y) {
       const w = state.size;
       const h = state.size;
-
       const cx = w / 2;
       const cy = h / 2;
-
       const zRot = degToRad(state.affine.rotationDeg);
-
-      const A = [
-        [state.affine.scaleX, state.affine.shearX],
-        [state.affine.shearY, state.affine.scaleY]
-      ];
-
-      const R = [
-        [Math.cos(zRot), -Math.sin(zRot)],
-        [Math.sin(zRot), Math.cos(zRot)]
-      ];
-
+      const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
+      const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
       const M = [
-        [
-          R[0][0] * A[0][0] + R[0][1] * A[1][0],
-          R[0][0] * A[0][1] + R[0][1] * A[1][1]
-        ],
-        [
-          R[1][0] * A[0][0] + R[1][1] * A[1][0],
-          R[1][0] * A[0][1] + R[1][1] * A[1][1]
-        ]
+        [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
+        [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
       ];
-
       const Minv = mat2Inv(M);
       if (!Minv) return null;
-
-      const dx = x - cx;
-      const dy = y - cy;
-
-      const srcLocal = mat2MulVec(Minv, [dx, dy]);
-
-      return {
-        x: srcLocal[0] + cx,
-        y: srcLocal[1] + cy
-      };
+      const srcLocal = mat2MulVec(Minv, [x - cx, y - cy]);
+      return { x: srcLocal[0] + cx, y: srcLocal[1] + cy };
     }
 
     function mapDisplayToSourcePerspective(x, y) {
       const w = state.size;
       const h = state.size;
-
       const cx = w / 2;
       const cy = h / 2;
-
       const tiltX = state.perspective.tiltX;
       const tiltY = state.perspective.tiltY;
       const focalScale = Math.max(0.05, state.perspective.focalScale);
       const zRot = degToRad(state.perspective.zRotationDeg);
-
       const xn = (x - cx) / cx;
       const yn = (y - cy) / cy;
-
       const p = rotate2D(xn, yn, -zRot);
-
       const xr = p.x;
       const yr = p.y;
-
       const denomX = 1 + tiltX * yr;
       const denomY = 1 + tiltY * xr;
-
-      if (Math.abs(denomX) < 1e-9 || Math.abs(denomY) < 1e-9) {
-        return null;
-      }
-
-      const srcXn = (xr / focalScale) / denomX;
-      const srcYn = (yr / focalScale) / denomY;
-
-      return {
-        x: srcXn * cx + cx,
-        y: srcYn * cy + cy
-      };
+      if (Math.abs(denomX) < 1e-9 || Math.abs(denomY) < 1e-9) return null;
+      return { x: ((xr / focalScale) / denomX) * cx + cx, y: ((yr / focalScale) / denomY) * cy + cy };
     }
 
     function mapDisplayToSourceCylindrical(x, y) {
       const w = state.size;
       const h = state.size;
-
       const zRot = degToRad(state.cylindrical.zRotationDeg);
-
       const radius = 1.0;
       const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
       const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-
-      const cameraDistance =
-        radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
-
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 1)));
       const cameraPos = [radius + cameraDistance, 0.0, 0.0];
-      const target = [0.0, 0.0, 0.0];
-      const viewDir = subVec3(target, cameraPos);
-
+      const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
       const focalPx = 0.95 * Math.max(w, h);
-
       const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
-
       const cx = (w - 1) / 2;
       const cy = (h - 1) / 2;
-
       const xCam = x - cx;
       const yCam = -(y - cy);
-
-      let D = addVec3(
-        addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)),
-        scaleVec3(fwd, focalPx)
-      );
-
+      let D = addVec3(addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)), scaleVec3(fwd, focalPx));
       D = normalizeVec3(D);
-
-      const Cx = cameraPos[0];
-      const Cy = cameraPos[1];
-      const Cz = cameraPos[2];
-
-      const Dx = D[0];
-      const Dy = D[1];
-      const Dz = D[2];
-
+      const Cx = cameraPos[0], Cy = cameraPos[1], Cz = cameraPos[2];
+      const Dx = D[0], Dy = D[1], Dz = D[2];
       const a = Dx * Dx + Dy * Dy;
       const b = 2.0 * (Cx * Dx + Cy * Dy);
       const c = Cx * Cx + Cy * Cy - radius * radius;
-
       if (a <= 1e-12) return null;
-
       const disc = b * b - 4.0 * a * c;
       if (disc <= 0.0) return null;
-
       const sqrtDisc = Math.sqrt(disc);
-
       const t1 = (-b - sqrtDisc) / (2.0 * a);
       const t2 = (-b + sqrtDisc) / (2.0 * a);
-
       let t = Infinity;
-
       if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
       else if (t1 > 1e-6) t = t1;
       else if (t2 > 1e-6) t = t2;
-
       if (!Number.isFinite(t)) return null;
-
       const Px = Cx + t * Dx;
       const Py = Cy + t * Dy;
       const Pz = Cz + t * Dz;
-
       const theta = Math.atan2(Py, Px);
-
       const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
       const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
-
       const Nx = Math.cos(theta);
       const Ny = Math.sin(theta);
       const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
-
-      if (!insideAngular || !insideVertical || !facing) {
-        return null;
-      }
-
+      if (!insideAngular || !insideVertical || !facing) return null;
       const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
       const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
-
-      return {
-        x: clamp(uNorm * (w - 1), 0, w - 1),
-        y: clamp(vNorm * (h - 1), 0, h - 1)
-      };
+      return { x: clamp(uNorm * (w - 1), 0, w - 1), y: clamp(vNorm * (h - 1), 0, h - 1) };
     }
 
     function numericalJacobianDisplayToSource(x, y) {
       const eps = 1.0;
-
       const px1 = mapDisplayToSource(x + eps, y);
       const px0 = mapDisplayToSource(x - eps, y);
       const py1 = mapDisplayToSource(x, y + eps);
       const py0 = mapDisplayToSource(x, y - eps);
-
-      if (!px1 || !px0 || !py1 || !py0) {
-        return null;
-      }
-
-      const dsxDx = (px1.x - px0.x) / (2 * eps);
-      const dsyDx = (px1.y - px0.y) / (2 * eps);
-
-      const dsxDy = (py1.x - py0.x) / (2 * eps);
-      const dsyDy = (py1.y - py0.y) / (2 * eps);
-
+      if (!px1 || !px0 || !py1 || !py0) return null;
       return [
-        [dsxDx, dsxDy],
-        [dsyDx, dsyDy]
+        [(px1.x - px0.x) / (2 * eps), (py1.x - py0.x) / (2 * eps)],
+        [(px1.y - px0.y) / (2 * eps), (py1.y - py0.y) / (2 * eps)]
       ];
     }
 
     function sourceToDisplayJacobianAt(x, y) {
       const JdisplayToSource = numericalJacobianDisplayToSource(x, y);
       if (!JdisplayToSource) return null;
-
       return mat2Inv(JdisplayToSource);
     }
 
     function getTextureShiftVectorsSourcePx() {
       const k = degToRad(state.texture.angleShiftDeg);
-
-      const U = [
-        0,
-        Math.round(state.texture.normShift)
-      ];
-
-      const V = [
-        Math.round(state.texture.normShift * Math.sin(k)),
-        Math.round(state.texture.normShift * Math.cos(k))
-      ];
-
+      const U = [0, Math.round(state.texture.normShift)];
+      const V = [Math.round(state.texture.normShift * Math.sin(k)), Math.round(state.texture.normShift * Math.cos(k))];
       return { U, V };
     }
 
-    function getTheoreticalPeakPixels(acWidth, acHeight, displayX, displayY) {
+    function getTheoreticalPeakInfo(acW, acH, displayX, displayY) {
       const J = sourceToDisplayJacobianAt(displayX, displayY);
-
-      if (!J) return [];
-
+      if (!J) return { peaks: [], U_ref_rc: null, V_ref_rc: null };
       const { U, V } = getTextureShiftVectorsSourcePx();
-
       const JU = mat2MulVec(J, U);
       const JV = mat2MulVec(J, V);
       const JW = mat2MulVec(J, [U[0] - V[0], U[1] - V[1]]);
-
-      const cx = (acWidth - 1) / 2.0;
-      const cy = (acHeight - 1) / 2.0;
-
-      const vectors = [
+      const cx = (acW - 1) / 2.0;
+      const cy = (acH - 1) / 2.0;
+      const peaks = [
         { name: "+JU", vec: JU, color: "#ff3030" },
         { name: "-JU", vec: [-JU[0], -JU[1]], color: "#ff3030" },
-
         { name: "+JV", vec: JV, color: "#00ff60" },
         { name: "-JV", vec: [-JV[0], -JV[1]], color: "#00ff60" },
-
         { name: "+J(U-V)", vec: JW, color: "#fff000" },
         { name: "-J(U-V)", vec: [-JW[0], -JW[1]], color: "#fff000" }
-      ];
-
-      return vectors.map((p) => ({
-        name: p.name,
-        x: cx + p.vec[0],
-        y: cy + p.vec[1],
-        color: p.color
-      }));
+      ].map((p) => ({ name: p.name, x: cx + p.vec[0], y: cy + p.vec[1], color: p.color }));
+      return {
+        peaks,
+        // références en convention [row, col] centrée, comme dans find_hexagon
+        U_ref_rc: [JU[1], JU[0]],
+        V_ref_rc: [JV[1], JV[0]]
+      };
     }
 
     // =========================================================
-    // AUTOCORRELATION + PEAK DETECTION
+    // AUTOCORRELATION + PORT JS DE find_hexagon
     // =========================================================
     function extractPatchGrayResampled(imageData, cx, cy, patchSize, targetSize) {
       const out = new Float64Array(targetSize * targetSize);
       const half = patchSize / 2;
-
       let k = 0;
-
       for (let j = 0; j < targetSize; j++) {
         const v = (j + 0.5) / targetSize;
         const yy = cy - half + v * patchSize;
-
         for (let i = 0; i < targetSize; i++) {
           const u = (i + 0.5) / targetSize;
           const xx = cx - half + u * patchSize;
-
           out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
         }
       }
-
       let mean = 0;
-
-      for (let i = 0; i < out.length; i++) {
-        mean += out[i];
-      }
-
+      for (let i = 0; i < out.length; i++) mean += out[i];
       mean /= Math.max(out.length, 1);
-
-      for (let i = 0; i < out.length; i++) {
-        out[i] -= mean;
-      }
-
+      for (let i = 0; i < out.length; i++) out[i] -= mean;
       return out;
     }
 
     function computeAutocorrelation2D(grayPatch, n) {
       const out = new Float64Array(n * n);
       const center = Math.floor(n / 2);
-
       for (let dy = -center; dy <= center; dy++) {
         for (let dx = -center; dx <= center; dx++) {
           let sum = 0.0;
           let energyA = 0.0;
           let energyB = 0.0;
-
           for (let y = 0; y < n; y++) {
             const yy = y + dy;
             if (yy < 0 || yy >= n) continue;
-
             for (let x = 0; x < n; x++) {
               const xx = x + dx;
               if (xx < 0 || xx >= n) continue;
-
               const a = grayPatch[y * n + x];
               const b = grayPatch[yy * n + xx];
-
               sum += a * b;
               energyA += a * a;
               energyB += b * b;
             }
           }
-
           const denom = Math.sqrt(Math.max(energyA * energyB, 1e-12));
           out[(dy + center) * n + (dx + center)] = sum / denom;
         }
       }
-
       return out;
     }
 
     function computeLaplacian2D(arr, w, h) {
       const out = new Float64Array(w * h);
-
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
           const c = arr[y * w + x];
@@ -1512,244 +1162,405 @@
           const right = arr[y * w + clamp(x + 1, 0, w - 1)];
           const up = arr[clamp(y - 1, 0, h - 1) * w + x];
           const down = arr[clamp(y + 1, 0, h - 1) * w + x];
-
           out[y * w + x] = left + right + up + down - 4 * c;
         }
       }
-
       return out;
     }
 
-    function refinePeakSubpixel3x3(arr, w, h, x, y) {
-      if (x <= 0 || x >= w - 1 || y <= 0 || y >= h - 1) {
-        return {
-          x,
-          y,
-          value: arr[y * w + x]
-        };
-      }
-
-      const c = arr[y * w + x];
-
-      const lx = arr[y * w + (x - 1)];
-      const rx = arr[y * w + (x + 1)];
-
-      const uy = arr[(y - 1) * w + x];
-      const dy = arr[(y + 1) * w + x];
-
-      const denomX = lx - 2 * c + rx;
-      const denomY = uy - 2 * c + dy;
-
-      let offX = 0;
-      let offY = 0;
-
-      if (Math.abs(denomX) > 1e-12) {
-        offX = 0.5 * (lx - rx) / denomX;
-      }
-
-      if (Math.abs(denomY) > 1e-12) {
-        offY = 0.5 * (uy - dy) / denomY;
-      }
-
-      offX = clamp(offX, -1, 1);
-      offY = clamp(offY, -1, 1);
-
-      return {
-        x: x + offX,
-        y: y + offY,
-        value: c
-      };
+    function sampleArrayBilinearWrap(R, n, r, c) {
+      let rr = ((r % n) + n) % n;
+      let cc = ((c % n) + n) % n;
+      const r0 = Math.floor(rr) % n;
+      const c0 = Math.floor(cc) % n;
+      const r1 = (r0 + 1) % n;
+      const c1 = (c0 + 1) % n;
+      const ar = rr - Math.floor(rr);
+      const ac = cc - Math.floor(cc);
+      const v00 = R[r0 * n + c0];
+      const v10 = R[r1 * n + c0];
+      const v01 = R[r0 * n + c1];
+      const v11 = R[r1 * n + c1];
+      const v0 = v00 * (1 - ac) + v01 * ac;
+      const v1 = v10 * (1 - ac) + v11 * ac;
+      return v0 * (1 - ar) + v1 * ar;
     }
 
-    function findLocalPeakNear(arr, w, h, x0, y0, radius) {
-      let best = null;
-      let bestVal = -Infinity;
+    function torusDistance(p, q, n) {
+      const dr0 = Math.abs(p[0] - q[0]);
+      const dc0 = Math.abs(p[1] - q[1]);
+      const dr = Math.min(dr0, n - dr0);
+      const dc = Math.min(dc0, n - dc0);
+      return Math.hypot(dr, dc);
+    }
 
-      const xi0 = Math.round(x0);
-      const yi0 = Math.round(y0);
+    function toCenteredOffset(p, n, center) {
+      let dr = p[0] - center[0];
+      let dc = p[1] - center[1];
+      if (dr > n / 2) dr -= n;
+      if (dr < -n / 2) dr += n;
+      if (dc > n / 2) dc -= n;
+      if (dc < -n / 2) dc += n;
+      return [dr, dc];
+    }
 
-      for (let y = yi0 - radius; y <= yi0 + radius; y++) {
-        if (y < 1 || y >= h - 1) continue;
+    function refinePeakSubpixel3x3(R, n, r, c) {
+      if (r <= 0 || r >= n - 1 || c <= 0 || c >= n - 1) return [r, c];
+      const center = R[r * n + c];
+      const up = R[(r - 1) * n + c];
+      const down = R[(r + 1) * n + c];
+      const left = R[r * n + (c - 1)];
+      const right = R[r * n + (c + 1)];
+      const denomR = up - 2 * center + down;
+      const denomC = left - 2 * center + right;
+      let offR = 0;
+      let offC = 0;
+      if (Math.abs(denomR) > 1e-12) offR = 0.5 * (up - down) / denomR;
+      if (Math.abs(denomC) > 1e-12) offC = 0.5 * (left - right) / denomC;
+      offR = clamp(offR, -1, 1);
+      offC = clamp(offC, -1, 1);
+      return [r + offR, c + offC];
+    }
 
-        for (let x = xi0 - radius; x <= xi0 + radius; x++) {
-          if (x < 1 || x >= w - 1) continue;
+    function detectCandidatesSubpixelJS(R, n, kwargs) {
+      const k = Math.max(2, Math.floor(kwargs.k ?? 80));
+      const nmsSize = Math.max(3, Math.floor(kwargs.nmsSize ?? 9));
+      const rad = Math.floor(nmsSize / 2);
+      const excludeCenterRadius = Number(kwargs.excludeCenterRadius ?? 7.0);
+      const minSeparation = Number(kwargs.minSeparation ?? 3.0);
+      const refineSubpixel = kwargs.refineSubpixel !== false;
+      const center = [n / 2.0, n / 2.0];
+      const cy = center[0];
+      const cx = center[1];
+      const candidates = [];
 
-          const dx = x - x0;
-          const dy = y - y0;
-
-          if (dx * dx + dy * dy > radius * radius) continue;
-
-          const idx = y * w + x;
-          const v = arr[idx];
-
-          if (v > bestVal) {
-            bestVal = v;
-            best = { x, y, value: v };
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const distCenter = Math.hypot(r - cy, c - cx);
+          if (distCenter < excludeCenterRadius) continue;
+          const val = R[r * n + c];
+          let localMax = true;
+          let localMin = Infinity;
+          for (let dr = -rad; dr <= rad; dr++) {
+            for (let dc = -rad; dc <= rad; dc++) {
+              const rr = (r + dr + n) % n;
+              const cc = (c + dc + n) % n;
+              const vv = R[rr * n + cc];
+              if (vv > val) localMax = false;
+              if (vv < localMin) localMin = vv;
+            }
           }
+          if (!localMax) continue;
+          candidates.push({ r, c, prom: val - localMin, value: val });
         }
       }
 
+      candidates.sort((a, b) => b.prom - a.prom);
+      const kept = [];
+      for (const cand of candidates) {
+        if (cand.prom <= 0) continue;
+        const p = [cand.r, cand.c];
+        if (kept.every((q) => torusDistance(p, q, n) >= minSeparation)) {
+          const refined = refineSubpixel ? refinePeakSubpixel3x3(R, n, cand.r, cand.c) : [cand.r, cand.c];
+          kept.push(refined);
+        }
+        if (kept.length >= k) break;
+      }
+      return kept;
+    }
+
+    function energyUVSimpleJS(R, n, uPos, vPos, kwargs) {
+      const center = [n / 2.0, n / 2.0];
+      const uOff = toCenteredOffset(uPos, n, center);
+      const vOff = toCenteredOffset(vPos, n, center);
+      const wOff = [uOff[0] - vOff[0], uOff[1] - vOff[1]];
+      const wPos = [center[0] + wOff[0], center[1] + wOff[1]];
+      const E = 2.0 * (
+        sampleArrayBilinearWrap(R, n, uPos[0], uPos[1]) +
+        sampleArrayBilinearWrap(R, n, vPos[0], vPos[1]) +
+        sampleArrayBilinearWrap(R, n, wPos[0], wPos[1])
+      );
+      return { E, wPos, wOff };
+    }
+
+    function bestPairMaxEnergyJS(R, n, positions, kwargs) {
+      if (!positions || positions.length < 2) return null;
+      const center = [n / 2.0, n / 2.0];
+      const minDist = Number(kwargs.minDist ?? 3.0);
+      const antipodalTol = Number(kwargs.antipodalTol ?? 2.0);
+      const angleMinDeg = Number(kwargs.angleMinDeg ?? 12.0);
+      const wExcludeCenterRadius = Number(kwargs.wExcludeCenterRadius ?? kwargs.excludeCenterRadius ?? 7.0);
+      const sinMin = Math.sin(degToRad(angleMinDeg));
+      let best = null;
+      let bestE = -Infinity;
+
+      for (let i = 0; i < positions.length - 1; i++) {
+        const ui = positions[i];
+        for (let j = i + 1; j < positions.length; j++) {
+          const vj = positions[j];
+          if (torusDistance(ui, vj, n) < minDist) continue;
+          const uOff = toCenteredOffset(ui, n, center);
+          const vOff = toCenteredOffset(vj, n, center);
+          if (Math.hypot(uOff[0] + vOff[0], uOff[1] + vOff[1]) < antipodalTol) continue;
+          const nu = Math.hypot(uOff[0], uOff[1]);
+          const nv = Math.hypot(vOff[0], vOff[1]);
+          if (nu < 1e-9 || nv < 1e-9) continue;
+          const sinang = Math.abs(uOff[0] * vOff[1] - uOff[1] * vOff[0]) / (nu * nv);
+          if (sinang < sinMin) continue;
+          const e = energyUVSimpleJS(R, n, ui, vj, kwargs);
+          const wDist = Math.hypot(e.wOff[0], e.wOff[1]);
+          if (wExcludeCenterRadius > 0 && wDist < wExcludeCenterRadius) continue;
+          if (e.E > bestE) {
+            bestE = e.E;
+            best = { uPos: ui, vPos: vj, wPos: e.wPos, E: e.E };
+          }
+        }
+      }
+      return best;
+    }
+
+    function cos2(a, b) {
+      const na = Math.hypot(a[0], a[1]);
+      const nb = Math.hypot(b[0], b[1]);
+      if (na < 1e-9 || nb < 1e-9) return 0;
+      return (a[0] * b[0] + a[1] * b[1]) / (na * nb);
+    }
+
+    function orientUVByRefs(uOff, vOff, wOff, U_ref_rc, V_ref_rc) {
+      if (!U_ref_rc || !V_ref_rc) return { u: uOff, v: vOff, w: wOff };
+      const cands = [
+        { u: uOff, v: vOff },
+        { u: [-uOff[0], -uOff[1]], v: vOff },
+        { u: uOff, v: [-vOff[0], -vOff[1]] },
+        { u: [-uOff[0], -uOff[1]], v: [-vOff[0], -vOff[1]] }
+      ];
+      let best = cands[0];
+      let bestScore = -Infinity;
+      for (const cand of cands) {
+        const score = cos2(cand.u, U_ref_rc) + cos2(cand.v, V_ref_rc);
+        if (score > bestScore) { bestScore = score; best = cand; }
+      }
+      const Wref = [U_ref_rc[0] - V_ref_rc[0], U_ref_rc[1] - V_ref_rc[1]];
+      const wSame = cos2(wOff, Wref) >= 0 ? wOff : [-wOff[0], -wOff[1]];
+      return { u: best.u, v: best.v, w: wSame };
+    }
+
+    function findHexagonJS(R, n, kwargs, U_ref_rc = null, V_ref_rc = null) {
+      const refined = detectCandidatesSubpixelJS(R, n, kwargs);
+      if (refined.length < 2) return null;
+      const best = bestPairMaxEnergyJS(R, n, refined, kwargs);
       if (!best) return null;
-
-      return refinePeakSubpixel3x3(arr, w, h, best.x, best.y);
+      const center = [n / 2.0, n / 2.0];
+      const uC = toCenteredOffset(best.uPos, n, center);
+      const vC = toCenteredOffset(best.vPos, n, center);
+      const wC = toCenteredOffset(best.wPos, n, center);
+      const oriented = orientUVByRefs(uC, vC, wC, U_ref_rc, V_ref_rc);
+      return {
+        u_fin: oriented.u,
+        v_fin: oriented.v,
+        w_fin: oriented.w,
+        energy_final: best.E,
+        refined_peaks: refined,
+        hex6_centered: [
+          oriented.u,
+          [-oriented.u[0], -oriented.u[1]],
+          oriented.v,
+          [-oriented.v[0], -oriented.v[1]],
+          oriented.w,
+          [-oriented.w[0], -oriented.w[1]]
+        ]
+      };
     }
 
-    function detectPeaksAroundTheoretical(ac, w, h, theoreticalPeaks) {
-      const found = [];
-
-      theoreticalPeaks.forEach((p) => {
-        if (p.x < 0 || p.x >= w || p.y < 0 || p.y >= h) return;
-
-        const peak = findLocalPeakNear(
-          ac,
-          w,
-          h,
-          p.x,
-          p.y,
-          state.peakSearchRadius
-        );
-
-        if (!peak) return;
-
-        found.push({
-          name: `F${p.name}`,
-          x: peak.x,
-          y: peak.y,
-          value: peak.value,
-          color: p.color
-        });
-      });
-
-      return found;
+    function hexResultToPreviewPeaks(res, n) {
+      if (!res) return [];
+      const cx = (n - 1) / 2.0;
+      const cy = (n - 1) / 2.0;
+      const items = [
+        { name: "F+U", off: res.u_fin, color: "#ff9999" },
+        { name: "F-U", off: [-res.u_fin[0], -res.u_fin[1]], color: "#ff9999" },
+        { name: "F+V", off: res.v_fin, color: "#99ff99" },
+        { name: "F-V", off: [-res.v_fin[0], -res.v_fin[1]], color: "#99ff99" },
+        { name: "F+W", off: res.w_fin, color: "#ffff99" },
+        { name: "F-W", off: [-res.w_fin[0], -res.w_fin[1]], color: "#ffff99" }
+      ];
+      // off is [dr, dc], canvas uses x=col, y=row
+      return items.map((p) => ({ name: p.name, x: cx + p.off[1], y: cy + p.off[0], color: p.color }));
     }
 
-    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, acW, acH) {
+    function runStableHexagonJS(fullPatch, patchSize, targetSize, displayX, displayY, theoreticalInfo) {
+      const kwargs = state.peakDetection;
+      const minPs = Math.max(16, Math.floor(kwargs.minPs ?? 40));
+      const maxPs = Math.min(Math.floor(kwargs.maxPs ?? patchSize), patchSize);
+      const step = Math.max(1, Math.floor(kwargs.step ?? 4));
+      const stableSeqLen = Math.max(2, Math.floor(kwargs.stableSeqLen ?? 3));
+      const stableTol = Number(kwargs.stableTol ?? 1.0);
+      let lastPts6 = null;
+      let runLen = 0;
+      const stable = [];
+      let best = null;
+      let bestD = Infinity;
+
+      function buildSubPatchFromFull(ps) {
+        const n = targetSize;
+        const out = new Float64Array(n * n);
+        const scale = ps / patchSize;
+        const halfN = n / 2;
+        let idx = 0;
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            const srcR = halfN + (r - halfN) * scale;
+            const srcC = halfN + (c - halfN) * scale;
+            out[idx++] = samplePatchBilinear(fullPatch, n, srcR, srcC);
+          }
+        }
+        let mean = 0;
+        for (let i = 0; i < out.length; i++) mean += out[i];
+        mean /= Math.max(out.length, 1);
+        for (let i = 0; i < out.length; i++) out[i] -= mean;
+        return out;
+      }
+
+      for (let ps = minPs; ps <= maxPs; ps += step) {
+        const patch = buildSubPatchFromFull(ps);
+        const ac = computeAutocorrelation2D(patch, targetSize);
+        const res = findHexagonJS(ac, targetSize, kwargs, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
+        if (!res) {
+          lastPts6 = null;
+          runLen = 0;
+          stable.length = 0;
+          continue;
+        }
+        const pts6 = res.hex6_centered.map((o) => [o[1], o[0]]); // [dc, dr]
+        if (lastPts6) {
+          let dmax = 0;
+          for (let i = 0; i < 6; i++) {
+            dmax = Math.max(dmax, Math.hypot(pts6[i][0] - lastPts6[i][0], pts6[i][1] - lastPts6[i][1]));
+          }
+          if (dmax < bestD) {
+            bestD = dmax;
+            best = res;
+          }
+          if (dmax <= stableTol) {
+            runLen += 1;
+            stable.push(res);
+            if (runLen >= stableSeqLen) return res;
+          } else {
+            runLen = 1;
+            stable.length = 0;
+            stable.push(res);
+          }
+        } else {
+          runLen = 1;
+          stable.length = 0;
+          stable.push(res);
+        }
+        lastPts6 = pts6;
+      }
+      return best;
+    }
+
+    function samplePatchBilinear(patch, n, r, c) {
+      if (r < 0 || r > n - 1 || c < 0 || c > n - 1) return 0;
+      const r0 = Math.floor(r);
+      const c0 = Math.floor(c);
+      const r1 = Math.min(r0 + 1, n - 1);
+      const c1 = Math.min(c0 + 1, n - 1);
+      const ar = r - r0;
+      const ac = c - c0;
+      const v00 = patch[r0 * n + c0];
+      const v10 = patch[r1 * n + c0];
+      const v01 = patch[r0 * n + c1];
+      const v11 = patch[r1 * n + c1];
+      const v0 = v00 * (1 - ac) + v01 * ac;
+      const v1 = v10 * (1 - ac) + v11 * ac;
+      return v0 * (1 - ar) + v1 * ar;
+    }
+
+    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, candidatePeaks, acW, acH, detectionInfo) {
       if (!acorrCtx || !acorrCanvas) return;
-
       const sx = acorrCanvas.width / acW;
       const sy = acorrCanvas.height / acH;
-
       const cx = ((acW - 1) / 2.0) * sx;
       const cy = ((acH - 1) / 2.0) * sy;
 
-      drawCircleCanvas(acorrCtx, cx, cy, 5, "#00ffff", 2);
-      drawTextCanvas(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
+      if (candidatePeaks && candidatePeaks.length) {
+        candidatePeaks.slice(0, 20).forEach((p) => {
+          const px = p[1] * sx;
+          const py = p[0] * sy;
+          drawCircle(acorrCtx, px, py, 2.5, "rgba(255,255,255,0.65)", 1);
+        });
+      }
+
+      drawCircle(acorrCtx, cx, cy, 5, "#00ffff", 2);
+      drawText(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
 
       theoreticalPeaks.forEach((p) => {
         const px = p.x * sx;
         const py = p.y * sy;
-
-        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
-          return;
-        }
-
-        drawCrossSubpixel(acorrCtx, px, py, p.color, 7, 2);
-        drawTextCanvas(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) return;
+        drawCross(acorrCtx, px, py, p.color, 7, 2);
+        drawText(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
       });
 
       foundPeaks.forEach((p) => {
         const px = p.x * sx;
         const py = p.y * sy;
-
-        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
-          return;
-        }
-
-        drawCircleCanvas(acorrCtx, px, py, 6, p.color, 2);
-        drawTextCanvas(acorrCtx, p.name, px + 7, py - 7, p.color);
+        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) return;
+        drawCircle(acorrCtx, px, py, 6, p.color, 2);
+        drawText(acorrCtx, p.name, px + 7, py - 7, p.color);
       });
+
+      if (detectionInfo && detectionInfo.energy_final !== undefined) {
+        drawText(acorrCtx, `E=${Number(detectionInfo.energy_final).toFixed(3)}`, 8, acorrCanvas.height - 10, "#ffffff");
+      }
     }
 
     function renderAutocorrelationAt(x, y) {
-      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) {
-        return;
-      }
+      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
 
       const patchSize = state.patchSize;
       const computeSize = Math.min(state.previewComputeSize, patchSize);
-
       const cx = x;
       const cy = y;
 
-      const patch = extractPatchGrayResampled(
-        state.displayedImageData,
-        cx,
-        cy,
-        patchSize,
-        computeSize
-      );
-
+      const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, patchSize, computeSize);
       const ac = computeAutocorrelation2D(patch, computeSize);
-
-      const displayField =
-        state.displayMode === "laplacian"
-          ? computeLaplacian2D(ac, computeSize, computeSize)
-          : ac;
-
-      const contrasted01 = applyDisplayContrastRobust(
-        displayField,
-        computeSize,
-        computeSize,
-        state.previewContrast,
-        state.displayMode
-      );
-
+      const displayField = state.displayMode === "laplacian" ? computeLaplacian2D(ac, computeSize, computeSize) : ac;
+      const contrasted01 = applyDisplayContrastRobust(displayField, computeSize, computeSize, state.previewContrast, state.displayMode);
       const gray = float01ToUint8(contrasted01);
       const img = createImageDataFromGray(gray, computeSize, computeSize);
 
       const tempCanvas = document.createElement("canvas");
       tempCanvas.width = computeSize;
       tempCanvas.height = computeSize;
-
       const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
       tempCtx.putImageData(img, 0, 0);
 
       acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
       acorrCtx.imageSmoothingEnabled = false;
       acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
-
-      drawCrossSubpixel(
-        acorrCtx,
-        acorrCanvas.width / 2,
-        acorrCanvas.height / 2,
-        "#00ffff",
-        5,
-        1
-      );
+      drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
 
       if (state.peaksEnabled) {
-        const theoreticalPeaks = getTheoreticalPeakPixels(
-          computeSize,
-          computeSize,
-          cx,
-          cy
-        );
-
-        const foundPeaks = detectPeaksAroundTheoretical(
-          ac,
-          computeSize,
-          computeSize,
-          theoreticalPeaks
-        );
-
-        drawPeakOverlayOnPreview(
-          theoreticalPeaks,
-          foundPeaks,
-          computeSize,
-          computeSize
-        );
+        const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
+        let detection = null;
+        if (state.peakDetection.useStablePatch) {
+          detection = runStableHexagonJS(patch, patchSize, computeSize, cx, cy, theoreticalInfo);
+        } else {
+          detection = findHexagonJS(ac, computeSize, state.peakDetection, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
+        }
+        state.lastDetection = detection;
+        const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
+        const candidates = detection && detection.refined_peaks ? detection.refined_peaks : [];
+        drawPeakOverlayOnPreview(theoreticalInfo.peaks, foundPeaks, candidates, computeSize, computeSize, detection);
       }
 
       if (acorrModeLabel) {
-        acorrModeLabel.textContent =
-          state.displayMode === "laplacian"
-            ? "Laplacian of Autocorrelation"
-            : "Autocorrelation";
+        acorrModeLabel.textContent = state.displayMode === "laplacian" ? "Laplacian of Autocorrelation" : "Autocorrelation";
       }
-
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = patchSize;
-
       redrawMainCanvas();
     }
 
@@ -1761,24 +1572,19 @@
       state.affine = { ...DEFAULTS.affine };
       state.perspective = { ...DEFAULTS.perspective };
       state.cylindrical = { ...DEFAULTS.cylindrical };
-
       state.patchSize = 90;
       state.previewContrast = 2.2;
-
       state.displayMode = "autocorr";
       state.peaksEnabled = false;
-
       state.projectionIndex = 0;
-
       state.lockedPatch = false;
       state.mouseX = state.size / 2;
       state.mouseY = state.size / 2;
       state.lockedPatchX = state.mouseX;
       state.lockedPatchY = state.mouseY;
-
+      state.lastDetection = null;
       syncControlsFromState();
       renderGeneratedTexture();
-
       if (state.autocorrEnabled) {
         const p = getActivePatchCenter();
         renderAutocorrelationAt(p.x, p.y);
@@ -1788,26 +1594,14 @@
     }
 
     function updatePreviewContrast(delta) {
-      state.previewContrast = clamp(
-        Math.round((state.previewContrast + delta) * 10) / 10,
-        0.2,
-        8.0
-      );
-
-      if (contrastSlider) {
-        contrastSlider.value = String(state.previewContrast);
-      }
-
+      state.previewContrast = clamp(Math.round((state.previewContrast + delta) * 10) / 10, 0.2, 8.0);
+      if (contrastSlider) contrastSlider.value = String(state.previewContrast);
       refreshControlLabels();
-
-      if (state.autocorrEnabled) {
-        schedulePreviewRender();
-      }
+      if (state.autocorrEnabled) schedulePreviewRender();
     }
 
     function cycleProjectionMode() {
       state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
-
       refreshProjectionPanels();
       applyCurrentProjection();
     }
@@ -1823,26 +1617,16 @@
     }
 
     if (btnProjection) {
-      btnProjection.addEventListener("click", () => {
-        cycleProjectionMode();
-      });
+      btnProjection.addEventListener("click", () => cycleProjectionMode());
     }
 
     if (btnAutocorr) {
       btnAutocorr.addEventListener("click", () => {
-        if (!state.autocorrEnabled) {
-          state.displayMode = "autocorr";
-        }
-
+        if (!state.autocorrEnabled) state.displayMode = "autocorr";
         state.autocorrEnabled = !state.autocorrEnabled;
-
-        if (!state.autocorrEnabled) {
-          state.peaksEnabled = false;
-        }
-
+        if (!state.autocorrEnabled) state.peaksEnabled = false;
         refreshAutocorrStateUI();
         refreshPeakStateUI();
-
         if (state.autocorrEnabled) {
           const p = getActivePatchCenter();
           renderAutocorrelationAt(p.x, p.y);
@@ -1855,34 +1639,24 @@
     if (btnDetectPeaks) {
       btnDetectPeaks.addEventListener("click", () => {
         state.peaksEnabled = !state.peaksEnabled;
-
         if (state.peaksEnabled && !state.autocorrEnabled) {
           state.autocorrEnabled = true;
           state.displayMode = "autocorr";
-          refreshAutocorrStateUI();
         }
-
+        refreshAutocorrStateUI();
         refreshPeakStateUI();
-
         const p = getActivePatchCenter();
         renderAutocorrelationAt(p.x, p.y);
       });
     }
 
-    if (btnResetParams) {
-      btnResetParams.addEventListener("click", () => {
-        resetAllParams();
-      });
-    }
+    if (btnResetParams) btnResetParams.addEventListener("click", () => resetAllParams());
 
     if (contrastSlider) {
       contrastSlider.addEventListener("input", () => {
         state.previewContrast = parseFloat(contrastSlider.value);
         refreshControlLabels();
-
-        if (state.autocorrEnabled) {
-          schedulePreviewRender();
-        }
+        if (state.autocorrEnabled) schedulePreviewRender();
       });
     }
 
@@ -1890,18 +1664,13 @@
       patchSizeControl.addEventListener("input", () => {
         updateStateFromControls();
         refreshControlLabels();
-
-        if (state.autocorrEnabled) {
-          schedulePreviewRender();
-        } else {
-          redrawMainCanvas();
-        }
+        if (state.autocorrEnabled) schedulePreviewRender();
+        else redrawMainCanvas();
       });
     }
 
     [texOccupancy, texDilation, texAngle, texShift, texBlur].forEach((el) => {
       if (!el) return;
-
       el.addEventListener("input", () => {
         updateStateFromControls();
         renderGeneratedTexture();
@@ -1910,7 +1679,6 @@
 
     controlIds.forEach((id) => {
       if (!controls[id]) return;
-
       controls[id].addEventListener("input", () => {
         updateStateFromControls();
         applyCurrentProjection();
@@ -1919,10 +1687,8 @@
 
     canvas.addEventListener("mousemove", (event) => {
       const pos = getCanvasMousePos(event, canvas);
-
       state.mouseX = pos.x;
       state.mouseY = pos.y;
-
       if (state.autocorrEnabled) {
         if (!state.lockedPatch) {
           updateAutocorrPreviewPosition(event.clientX, event.clientY);
@@ -1937,16 +1703,10 @@
 
     canvas.addEventListener("mouseenter", (event) => {
       canvasHovered = true;
-
       if (state.autocorrEnabled) {
         if (acorrPreview) acorrPreview.style.display = "block";
-
         if (state.lockedPatch) {
-          updateAutocorrPreviewPositionFromCanvasPoint(
-            state.lockedPatchX,
-            state.lockedPatchY
-          );
-
+          updateAutocorrPreviewPositionFromCanvasPoint(state.lockedPatchX, state.lockedPatchY);
           renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
         } else {
           updateAutocorrPreviewPosition(event.clientX, event.clientY);
@@ -1957,11 +1717,8 @@
 
     canvas.addEventListener("contextmenu", (event) => {
       if (!state.autocorrEnabled) return;
-
       event.preventDefault();
-
       state.lockedPatch = false;
-
       updateAutocorrPreviewPosition(event.clientX, event.clientY);
       redrawMainCanvas();
       schedulePreviewRender();
@@ -1969,28 +1726,17 @@
 
     canvas.addEventListener("click", (event) => {
       if (!state.autocorrEnabled) return;
-
       const pos = getCanvasMousePos(event, canvas);
-
       state.lockedPatch = true;
       state.lockedPatchX = pos.x;
       state.lockedPatchY = pos.y;
-
-      updateAutocorrPreviewPositionFromCanvasPoint(
-        state.lockedPatchX,
-        state.lockedPatchY
-      );
-
+      updateAutocorrPreviewPositionFromCanvasPoint(state.lockedPatchX, state.lockedPatchY);
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
     });
 
     canvas.addEventListener("mouseleave", () => {
       canvasHovered = false;
-
-      if (state.autocorrEnabled && acorrPreview && !state.lockedPatch) {
-        acorrPreview.style.display = "none";
-      }
-
+      if (state.autocorrEnabled && acorrPreview && !state.lockedPatch) acorrPreview.style.display = "none";
       redrawMainCanvas();
     });
 
@@ -1998,23 +1744,15 @@
       "wheel",
       (event) => {
         if (!state.autocorrEnabled) return;
-
         event.preventDefault();
-
         const step = event.deltaY < 0 ? 4 : -4;
         let next = clamp(state.patchSize + step, 32, 140);
-
         if (next % 2 !== 0) {
           next += step > 0 ? 1 : -1;
           next = clamp(next, 32, 140);
         }
-
         state.patchSize = next;
-
-        if (patchSizeControl) {
-          patchSizeControl.value = String(state.patchSize);
-        }
-
+        if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
         refreshControlLabels();
         schedulePreviewRender();
       },
@@ -2023,7 +1761,6 @@
 
     window.addEventListener("keydown", (event) => {
       if (!state.autocorrEnabled || !canvasHovered) return;
-
       if (event.key === "ArrowRight") {
         event.preventDefault();
         updatePreviewContrast(0.1);
@@ -2032,26 +1769,19 @@
         updatePreviewContrast(-0.1);
       } else if (event.key === "s" || event.key === "S") {
         event.preventDefault();
-
-        state.displayMode =
-          state.displayMode === "autocorr" ? "laplacian" : "autocorr";
-
+        state.displayMode = state.displayMode === "autocorr" ? "laplacian" : "autocorr";
         refreshAutocorrStateUI();
         schedulePreviewRender();
       } else if (event.key === "Escape") {
         event.preventDefault();
-
         state.lockedPatch = false;
-
         redrawMainCanvas();
         schedulePreviewRender();
       }
     });
 
     window.addEventListener("resize", () => {
-      if (state.autocorrEnabled) {
-        schedulePreviewRender();
-      }
+      if (state.autocorrEnabled) schedulePreviewRender();
     });
 
     // =========================================================

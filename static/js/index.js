@@ -1476,46 +1476,41 @@
       const v1 = v10 * (1 - ac) + v11 * ac;
       return v0 * (1 - ar) + v1 * ar;
     }
-    function drawPeakOverlayOnPreview(theoreticalPeaks, foundPeaks, acW, acH) {
+
+    function drawPeakOverlayOnPreview(foundPeaks, acW, acH, detectionInfo) {
       if (!acorrCtx || !acorrCanvas) return;
-    
+
       const sx = acorrCanvas.width / acW;
       const sy = acorrCanvas.height / acH;
-    
-      const cx = ((acW - 1) / 2.0) * sx;
-      const cy = ((acH - 1) / 2.0) * sy;
-    
-      // Centre de l’autocorrélation
-      drawCircleCanvas(acorrCtx, cx, cy, 5, "#00ffff", 2);
-      drawTextCanvas(acorrCtx, "0", cx + 6, cy + 12, "#00ffff");
-    
-      // Pics théoriques désactivés
-      /*
-      theoreticalPeaks.forEach((p) => {
-        const px = p.x * sx;
-        const py = p.y * sy;
-    
-        if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
-          return;
-        }
-    
-        drawCrossSubpixel(acorrCtx, px, py, p.color, 7, 2);
-        drawTextCanvas(acorrCtx, `T${p.name}`, px + 7, py + 10, p.color);
-      });
-      */
-    
-      // Pics détectés uniquement
+
+      // On garde uniquement le centre de l’autocorrélation + les pics trouvés.
+      // Les pics théoriques et les candidats intermédiaires ne sont plus affichés.
+      const cx0 = ((acW - 1) / 2.0) * sx;
+      const cy0 = ((acH - 1) / 2.0) * sy;
+      drawCircle(acorrCtx, cx0, cy0, 5, "#00ffff", 2);
+      drawText(acorrCtx, "0", cx0 + 6, cy0 + 12, "#00ffff");
+
       foundPeaks.forEach((p) => {
         const px = p.x * sx;
         const py = p.y * sy;
-    
+
         if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
           return;
         }
-    
-        drawCircleCanvas(acorrCtx, px, py, 6, p.color, 2);
-        drawTextCanvas(acorrCtx, p.name, px + 7, py - 7, p.color);
+
+        drawCircle(acorrCtx, px, py, 6, p.color, 2);
+        drawText(acorrCtx, p.name, px + 7, py - 7, p.color);
       });
+
+      if (detectionInfo && detectionInfo.energy_final !== undefined) {
+        drawText(
+          acorrCtx,
+          `E=${Number(detectionInfo.energy_final).toFixed(3)}`,
+          8,
+          acorrCanvas.height - 10,
+          "#ffffff"
+        );
+      }
     }
 
     function renderAutocorrelationAt(x, y) {
@@ -1554,8 +1549,7 @@
         }
         state.lastDetection = detection;
         const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
-        const candidates = detection && detection.refined_peaks ? detection.refined_peaks : [];
-        drawPeakOverlayOnPreview(theoreticalInfo.peaks, foundPeaks, candidates, computeSize, computeSize, detection);
+        drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
       }
 
       if (acorrModeLabel) {

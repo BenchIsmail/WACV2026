@@ -1485,14 +1485,18 @@
 
       // On garde uniquement le centre de l’autocorrélation + les pics trouvés.
       // Les pics théoriques et les candidats intermédiaires ne sont plus affichés.
-      const cx0 = ((acW - 1) / 2.0) * sx;
-      const cy0 = ((acH - 1) / 2.0) * sy;
+      // IMPORTANT: p.x/p.y are source-pixel indices in the small autocorr image.
+      // Since we upscale with imageSmoothing=false, pixel i is displayed as the block
+      // [i*s, (i+1)*s]. The visual center is therefore (i + 0.5) * s.
+      // Without this +0.5 shift, circles look systematically shifted from bright blobs.
+      const cx0 = (((acW - 1) / 2.0) + 0.5) * sx;
+      const cy0 = (((acH - 1) / 2.0) + 0.5) * sy;
       drawCircle(acorrCtx, cx0, cy0, 5, "#00ffff", 2);
       drawText(acorrCtx, "0", cx0 + 6, cy0 + 12, "#00ffff");
 
       foundPeaks.forEach((p) => {
-        const px = p.x * sx;
-        const py = p.y * sy;
+        const px = (p.x + 0.5) * sx;
+        const py = (p.y + 0.5) * sy;
 
         if (px < 0 || px >= acorrCanvas.width || py < 0 || py >= acorrCanvas.height) {
           return;

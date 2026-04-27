@@ -522,6 +522,11 @@
               <span>Autocorrelation</span>
             </button>
 
+            <button id="btn-detect-peaks" class="button is-success is-rounded">
+              <span class="icon"><i class="fas fa-crosshairs"></i></span>
+              <span>Detect Peaks</span>
+            </button>
+
             <button id="btn-reset-params" class="button is-light is-rounded">
               <span class="icon"><i class="fas fa-rotate-left"></i></span>
               <span>Reset Params</span>
@@ -536,12 +541,14 @@
             <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
             <span class="status-pill">Patch: <span id="patch-size-inline">90</span> px</span>
             <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
+            <span class="status-pill">Peaks: <span id="peaks-state-label">OFF</span></span>
           </div>
 
           <p class="interactive-help">
             Active l’autocorrélation avec le bouton dédié. Déplace la souris sur l’image pour voir la zone locale.
-            Utilise la <strong>molette</strong> pour changer la taille du patch (90 au départ, max 140).
+            Utilise la <strong>molette</strong> pour changer la taille du patch.
             Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
+            Utilise <strong>Detect Peaks</strong> pour afficher les pics théoriques et les pics détectés.
             Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
           </p>
 

@@ -280,6 +280,79 @@
       background: white;
     }
 
+
+    /* Wider interactive test zone layout */
+    .interactive-section {
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+
+    .interactive-wide-container {
+      width: min(98vw, 1680px);
+      max-width: 1680px !important;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .interactive-box {
+      padding: clamp(1rem, 1.4vw, 1.6rem);
+    }
+
+    .interactive-workspace {
+      display: grid;
+      grid-template-columns: minmax(260px, 330px) minmax(520px, 1fr) minmax(280px, 360px);
+      gap: clamp(0.9rem, 1.4vw, 1.4rem);
+      align-items: start;
+      margin-top: 1.15rem;
+    }
+
+    .interactive-side {
+      min-width: 0;
+    }
+
+    .interactive-center {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .interactive-canvas-wrap {
+      width: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 0;
+    }
+
+    #interactive-canvas {
+      width: min(100%, 860px);
+      max-width: 860px;
+      aspect-ratio: 1 / 1;
+    }
+
+    .interactive-center .interactive-status {
+      width: 100%;
+    }
+
+    .interactive-center .interactive-help {
+      max-width: 900px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    .control-card {
+      height: fit-content;
+    }
+
+    .control-row {
+      grid-template-columns: minmax(0, 1fr) minmax(4.1rem, auto);
+    }
+
+    .control-value {
+      justify-self: end;
+    }
+
     .projection-panel {
       display: none;
     }
@@ -371,9 +444,36 @@
       font-weight: 600;
     }
 
+    @media screen and (max-width: 1180px) {
+      .interactive-workspace {
+        grid-template-columns: 1fr;
+      }
+
+      .interactive-side.is-left {
+        order: 2;
+      }
+
+      .interactive-center {
+        order: 1;
+      }
+
+      .interactive-side.is-right {
+        order: 3;
+      }
+
+      #interactive-canvas {
+        width: min(100%, 900px);
+      }
+    }
+
     @media screen and (max-width: 900px) {
       .control-panels {
         grid-template-columns: 1fr;
+      }
+
+      .interactive-section {
+        padding-left: 0.75rem;
+        padding-right: 0.75rem;
       }
     }
 
@@ -514,8 +614,8 @@
       </div>
     </section>
 
-    <section class="section">
-      <div class="container is-max-desktop">
+    <section class="section interactive-section">
+      <div class="container is-fluid interactive-wide-container">
         <h2 class="title is-3 has-text-centered">Interactive Test Zone</h2>
 
         <div class="interactive-box">
@@ -546,242 +646,247 @@
             </button>
           </div>
 
-          <div class="interactive-canvas-wrap">
-            <canvas id="interactive-canvas" width="900" height="900"></canvas>
-          </div>
+          <div class="interactive-workspace">
+            <aside class="interactive-side is-left">
+              <div class="control-card">
+                <h3>Texture Parameters</h3>
+                <div class="control-grid">
+                  <div class="control-row">
+                    <span>Black occupancy</span>
+                    <span id="val-occupancy" class="control-value">0.40</span>
+                    <input id="tex-occupancy" type="range" min="0.05" max="0.40" step="0.01" value="0.40">
+                  </div>
 
-          <div class="interactive-status">
-            <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
-            <span class="status-pill">Patch: <span id="patch-size-inline">90</span> px</span>
-            <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
-            <span class="status-pill">Peaks: <span id="peaks-state-label">OFF</span></span>
-          </div>
+                  <div class="control-row">
+                    <span>Dilation radius</span>
+                    <span id="val-dilation" class="control-value">0</span>
+                    <input id="tex-dilation" type="range" min="0" max="2" step="1" value="0">
+                  </div>
 
-          <p class="interactive-help">
-            Active l’autocorrélation avec le bouton dédié. Déplace la souris sur l’image pour voir la zone locale.
-            Utilise la <strong>molette</strong> pour changer la taille du patch.
-            Clique sur les <strong>valeurs bleues</strong> des sliders pour entrer une valeur exacte.
-            Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
-            Utilise <strong>Detect Peaks</strong> pour afficher uniquement les pics trouvés.
-            Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
-          </p>
+                  <div class="control-row">
+                    <span>Shift angle</span>
+                    <span id="val-angle" class="control-value">90°</span>
+                    <input id="tex-angle" type="range" min="-180" max="180" step="1" value="90">
+                  </div>
 
-          <div class="control-panels">
-            <div class="control-card">
-              <h3>Texture Parameters</h3>
-              <div class="control-grid">
-                <div class="control-row">
-                  <span>Black occupancy</span>
-                  <span id="val-occupancy" class="control-value">0.40</span>
-                  <input id="tex-occupancy" type="range" min="0.05" max="0.40" step="0.01" value="0.40">
-                </div>
+                  <div class="control-row">
+                    <span>Shift norm</span>
+                    <span id="val-shift" class="control-value">22</span>
+                    <input id="tex-shift" type="range" min="6" max="60" step="1" value="22">
+                  </div>
 
-                <div class="control-row">
-                  <span>Dilation radius</span>
-                  <span id="val-dilation" class="control-value">0</span>
-                  <input id="tex-dilation" type="range" min="0" max="2" step="1" value="0">
-                </div>
+                  <div class="control-row">
+                    <span>Gaussian blur</span>
+                    <span id="val-blur" class="control-value">1.05</span>
+                    <input id="tex-blur" type="range" min="0" max="4" step="0.05" value="1.05">
+                  </div>
 
-                <div class="control-row">
-                  <span>Shift angle</span>
-                  <span id="val-angle" class="control-value">90°</span>
-                  <input id="tex-angle" type="range" min="-180" max="180" step="1" value="90">
-                </div>
-
-                <div class="control-row">
-                  <span>Shift norm</span>
-                  <span id="val-shift" class="control-value">22</span>
-                  <input id="tex-shift" type="range" min="6" max="60" step="1" value="22">
-                </div>
-
-                <div class="control-row">
-                  <span>Gaussian blur</span>
-                  <span id="val-blur" class="control-value">1.05</span>
-                  <input id="tex-blur" type="range" min="0" max="4" step="0.05" value="1.05">
-                </div>
-
-                <div class="control-row">
-                  <span>Patch size</span>
-                  <span id="val-patch-slider" class="control-value">90 px</span>
-                  <input id="patch-size-control" type="range" min="32" max="140" step="2" value="90">
+                  <div class="control-row">
+                    <span>Patch size</span>
+                    <span id="val-patch-slider" class="control-value">90 px</span>
+                    <input id="patch-size-control" type="range" min="32" max="140" step="2" value="90">
+                  </div>
                 </div>
               </div>
+            </aside>
+
+            <div class="interactive-center">
+              <div class="interactive-canvas-wrap">
+                <canvas id="interactive-canvas" width="900" height="900"></canvas>
+              </div>
+
+              <div class="interactive-status">
+                <span class="status-pill">Projection: <span id="projection-mode-label">Affine</span></span>
+                <span class="status-pill">Patch: <span id="patch-size-inline">90</span> px</span>
+                <span class="status-pill">Autocorrelation: <span id="autocorr-state-label">OFF</span></span>
+                <span class="status-pill">Peaks: <span id="peaks-state-label">OFF</span></span>
+              </div>
+
+              <p class="interactive-help">
+                Active l’autocorrélation avec le bouton dédié. Déplace la souris sur l’image pour voir la zone locale.
+                Utilise la <strong>molette</strong> pour changer la taille du patch.
+                Clique sur les <strong>valeurs bleues</strong> des sliders pour entrer une valeur exacte.
+                Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
+                Utilise <strong>Detect Peaks</strong> pour afficher uniquement les pics trouvés.
+                Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
+              </p>
             </div>
 
-            <div class="control-card">
-              <h3>Projection Parameters</h3>
+            <aside class="interactive-side is-right">
+              <div class="control-card">
+                <h3>Projection Parameters</h3>
 
-              <div id="panel-affine" class="projection-panel is-active">
-                <div class="control-grid">
-                  <div class="control-row">
-                    <span>Rotation Z</span>
-                    <span id="val-a-rot" class="control-value">-18°</span>
-                    <input id="param-a-rot" type="range" min="-60" max="60" step="1" value="-18">
+                <div id="panel-affine" class="projection-panel is-active">
+                  <div class="control-grid">
+                    <div class="control-row">
+                      <span>Rotation Z</span>
+                      <span id="val-a-rot" class="control-value">-18°</span>
+                      <input id="param-a-rot" type="range" min="-60" max="60" step="1" value="-18">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Scale X</span>
+                      <span id="val-a-scalex" class="control-value">0.90</span>
+                      <input id="param-a-scalex" type="range" min="0.60" max="1.40" step="0.01" value="0.90">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Scale Y</span>
+                      <span id="val-a-scaley" class="control-value">0.95</span>
+                      <input id="param-a-scaley" type="range" min="0.60" max="1.40" step="0.01" value="0.95">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Shear X</span>
+                      <span id="val-a-shearx" class="control-value">0.38</span>
+                      <input id="param-a-shearx" type="range" min="-0.70" max="0.70" step="0.01" value="0.38">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Shear Y</span>
+                      <span id="val-a-sheary" class="control-value">-0.18</span>
+                      <input id="param-a-sheary" type="range" min="-0.70" max="0.70" step="0.01" value="-0.18">
+                    </div>
                   </div>
+                </div>
 
-                  <div class="control-row">
-                    <span>Scale X</span>
-                    <span id="val-a-scalex" class="control-value">0.90</span>
-                    <input id="param-a-scalex" type="range" min="0.60" max="1.40" step="0.01" value="0.90">
+                <div id="panel-perspective" class="projection-panel">
+                  <div class="control-grid">
+                    <div class="control-row">
+                      <span>Tilt X</span>
+                      <span id="val-p-tiltx" class="control-value">0.55</span>
+                      <input id="param-p-tiltx" type="range" min="-0.90" max="0.90" step="0.01" value="0.55">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Tilt Y</span>
+                      <span id="val-p-tilty" class="control-value">-0.15</span>
+                      <input id="param-p-tilty" type="range" min="-0.90" max="0.90" step="0.01" value="-0.15">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Focal scale</span>
+                      <span id="val-p-focal" class="control-value">1.25</span>
+                      <input id="param-p-focal" type="range" min="0.70" max="2.20" step="0.01" value="1.25">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Rotation Z</span>
+                      <span id="val-p-zrot" class="control-value">0°</span>
+                      <input id="param-p-zrot" type="range" min="-60" max="60" step="1" value="0">
+                    </div>
                   </div>
+                </div>
 
-                  <div class="control-row">
-                    <span>Scale Y</span>
-                    <span id="val-a-scaley" class="control-value">0.95</span>
-                    <input id="param-a-scaley" type="range" min="0.60" max="1.40" step="0.01" value="0.95">
+                <div id="panel-cylindrical" class="projection-panel">
+                  <div class="control-grid">
+                    <div class="control-row">
+                      <span>Angular span</span>
+                      <span id="val-c-curv" class="control-value">1.05</span>
+                      <input id="param-c-curv" type="range" min="0.05" max="1.50" step="0.01" value="1.05">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Camera distance</span>
+                      <span id="val-c-drop" class="control-value">0.35</span>
+                      <input id="param-c-drop" type="range" min="0.00" max="1.20" step="0.01" value="0.35">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Camera roll</span>
+                      <span id="val-c-zrot" class="control-value">0°</span>
+                      <input id="param-c-zrot" type="range" min="-60" max="60" step="1" value="0">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Label height</span>
+                      <span id="val-c-vstretch" class="control-value">1.00</span>
+                      <input id="param-c-vstretch" type="range" min="0.60" max="1.50" step="0.01" value="1.00">
+                    </div>
                   </div>
+                </div>
 
-                  <div class="control-row">
-                    <span>Shear X</span>
-                    <span id="val-a-shearx" class="control-value">0.38</span>
-                    <input id="param-a-shearx" type="range" min="-0.70" max="0.70" step="0.01" value="0.38">
+                <div id="panel-shoulder" class="projection-panel">
+                  <div class="control-grid">
+                    <div class="control-row">
+                      <span>Angular span</span>
+                      <span id="val-s-span" class="control-value">1.05</span>
+                      <input id="param-s-span" type="range" min="0.10" max="1.50" step="0.01" value="1.05">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Camera distance</span>
+                      <span id="val-s-camera" class="control-value">0.35</span>
+                      <input id="param-s-camera" type="range" min="0.00" max="1.20" step="0.01" value="0.35">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Neck radius</span>
+                      <span id="val-s-neck" class="control-value">0.55</span>
+                      <input id="param-s-neck" type="range" min="0.20" max="0.95" step="0.01" value="0.55">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Shoulder length</span>
+                      <span id="val-s-shoulder" class="control-value">0.55</span>
+                      <input id="param-s-shoulder" type="range" min="0.10" max="1.50" step="0.01" value="0.55">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Camera roll</span>
+                      <span id="val-s-roll" class="control-value">0°</span>
+                      <input id="param-s-roll" type="range" min="-60" max="60" step="1" value="0">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Label height</span>
+                      <span id="val-s-vstretch" class="control-value">1.00</span>
+                      <input id="param-s-vstretch" type="range" min="0.60" max="1.50" step="0.01" value="1.00">
+                    </div>
                   </div>
+                </div>
 
-                  <div class="control-row">
-                    <span>Shear Y</span>
-                    <span id="val-a-sheary" class="control-value">-0.18</span>
-                    <input id="param-a-sheary" type="range" min="-0.70" max="0.70" step="0.01" value="-0.18">
+                <div id="panel-crumpled" class="projection-panel">
+                  <div class="control-grid">
+                    <div class="control-row">
+                      <span>Crumple amplitude</span>
+                      <span id="val-r-amp" class="control-value">0.11</span>
+                      <input id="param-r-amp" type="range" min="0.00" max="0.30" step="0.01" value="0.11">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Crease frequency</span>
+                      <span id="val-r-freq" class="control-value">3.0</span>
+                      <input id="param-r-freq" type="range" min="1.0" max="8.0" step="0.1" value="3.0">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Perspective</span>
+                      <span id="val-r-persp" class="control-value">0.25</span>
+                      <input id="param-r-persp" type="range" min="0.00" max="0.80" step="0.01" value="0.25">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Camera roll</span>
+                      <span id="val-r-roll" class="control-value">0°</span>
+                      <input id="param-r-roll" type="range" min="-60" max="60" step="1" value="0">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Twist</span>
+                      <span id="val-r-twist" class="control-value">0.18</span>
+                      <input id="param-r-twist" type="range" min="-0.80" max="0.80" step="0.01" value="0.18">
+                    </div>
+
+                    <div class="control-row">
+                      <span>Shading</span>
+                      <span id="val-r-shade" class="control-value">0.35</span>
+                      <input id="param-r-shade" type="range" min="0.00" max="0.80" step="0.01" value="0.35">
+                    </div>
                   </div>
                 </div>
               </div>
-
-              <div id="panel-perspective" class="projection-panel">
-                <div class="control-grid">
-                  <div class="control-row">
-                    <span>Tilt X</span>
-                    <span id="val-p-tiltx" class="control-value">0.55</span>
-                    <input id="param-p-tiltx" type="range" min="-0.90" max="0.90" step="0.01" value="0.55">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Tilt Y</span>
-                    <span id="val-p-tilty" class="control-value">-0.15</span>
-                    <input id="param-p-tilty" type="range" min="-0.90" max="0.90" step="0.01" value="-0.15">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Focal scale</span>
-                    <span id="val-p-focal" class="control-value">1.25</span>
-                    <input id="param-p-focal" type="range" min="0.70" max="2.20" step="0.01" value="1.25">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Rotation Z</span>
-                    <span id="val-p-zrot" class="control-value">0°</span>
-                    <input id="param-p-zrot" type="range" min="-60" max="60" step="1" value="0">
-                  </div>
-                </div>
-              </div>
-
-              <div id="panel-cylindrical" class="projection-panel">
-                <div class="control-grid">
-                  <div class="control-row">
-                    <span>Angular span</span>
-                    <span id="val-c-curv" class="control-value">1.05</span>
-                    <input id="param-c-curv" type="range" min="0.05" max="1.50" step="0.01" value="1.05">
-                  </div>
-              
-                  <div class="control-row">
-                    <span>Camera distance</span>
-                    <span id="val-c-drop" class="control-value">0.35</span>
-                    <input id="param-c-drop" type="range" min="0.00" max="1.20" step="0.01" value="0.35">
-                  </div>
-              
-                  <div class="control-row">
-                    <span>Camera roll</span>
-                    <span id="val-c-zrot" class="control-value">0°</span>
-                    <input id="param-c-zrot" type="range" min="-60" max="60" step="1" value="0">
-                  </div>
-              
-                  <div class="control-row">
-                    <span>Label height</span>
-                    <span id="val-c-vstretch" class="control-value">1.00</span>
-                    <input id="param-c-vstretch" type="range" min="0.60" max="1.50" step="0.01" value="1.00">
-                  </div>
-                </div>
-              </div>
-
-              <div id="panel-shoulder" class="projection-panel">
-                <div class="control-grid">
-                  <div class="control-row">
-                    <span>Angular span</span>
-                    <span id="val-s-span" class="control-value">1.05</span>
-                    <input id="param-s-span" type="range" min="0.10" max="1.50" step="0.01" value="1.05">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Camera distance</span>
-                    <span id="val-s-camera" class="control-value">0.35</span>
-                    <input id="param-s-camera" type="range" min="0.00" max="1.20" step="0.01" value="0.35">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Neck radius</span>
-                    <span id="val-s-neck" class="control-value">0.55</span>
-                    <input id="param-s-neck" type="range" min="0.20" max="0.95" step="0.01" value="0.55">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Shoulder length</span>
-                    <span id="val-s-shoulder" class="control-value">0.55</span>
-                    <input id="param-s-shoulder" type="range" min="0.10" max="1.50" step="0.01" value="0.55">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Camera roll</span>
-                    <span id="val-s-roll" class="control-value">0°</span>
-                    <input id="param-s-roll" type="range" min="-60" max="60" step="1" value="0">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Label height</span>
-                    <span id="val-s-vstretch" class="control-value">1.00</span>
-                    <input id="param-s-vstretch" type="range" min="0.60" max="1.50" step="0.01" value="1.00">
-                  </div>
-                </div>
-              </div>
-
-              <div id="panel-crumpled" class="projection-panel">
-                <div class="control-grid">
-                  <div class="control-row">
-                    <span>Crumple amplitude</span>
-                    <span id="val-r-amp" class="control-value">0.11</span>
-                    <input id="param-r-amp" type="range" min="0.00" max="0.30" step="0.01" value="0.11">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Crease frequency</span>
-                    <span id="val-r-freq" class="control-value">3.0</span>
-                    <input id="param-r-freq" type="range" min="1.0" max="8.0" step="0.1" value="3.0">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Perspective</span>
-                    <span id="val-r-persp" class="control-value">0.25</span>
-                    <input id="param-r-persp" type="range" min="0.00" max="0.80" step="0.01" value="0.25">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Camera roll</span>
-                    <span id="val-r-roll" class="control-value">0°</span>
-                    <input id="param-r-roll" type="range" min="-60" max="60" step="1" value="0">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Twist</span>
-                    <span id="val-r-twist" class="control-value">0.18</span>
-                    <input id="param-r-twist" type="range" min="-0.80" max="0.80" step="0.01" value="0.18">
-                  </div>
-
-                  <div class="control-row">
-                    <span>Shading</span>
-                    <span id="val-r-shade" class="control-value">0.35</span>
-                    <input id="param-r-shade" type="range" min="0.00" max="0.80" step="0.01" value="0.35">
-                  </div>
-                </div>
-              </div>
-
-            </div>
+            </aside>
           </div>
         </div>
       </div>

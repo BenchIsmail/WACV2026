@@ -62,9 +62,15 @@
     const btnProjection = document.getElementById("btn-change-projection");
     const btnAutocorr = document.getElementById("btn-toggle-autocorr");
     const btnResetParams = document.getElementById("btn-reset-params");
+    const btnValidateAffinity = document.getElementById("btn-validate-affinity");
+    const btnToggleRectification = document.getElementById("btn-toggle-rectification");
+    const btnClearAffinities = document.getElementById("btn-clear-affinities");
 
     let btnDetectPeaks = document.getElementById("btn-detect-peaks");
     let peaksStateLabel = document.getElementById("peaks-state-label");
+    const validatedAffinityCount = document.getElementById("validated-affinity-count");
+    const rectificationStateLabel = document.getElementById("rectification-state-label");
+    const currentAffinityCond = document.getElementById("current-affinity-cond");
 
     const projectionModeLabel = document.getElementById("projection-mode-label");
     const patchSizeLabel = document.getElementById("patch-size-label");
@@ -241,7 +247,16 @@
         stableTol: 1.0
       },
 
-      lastDetection: null
+      lastDetection: null,
+
+      // Manual rectification workflow. Each validated item stores a local
+      // deformation matrix M such that observed_peak ≈ M * reference_peak.
+      // The rectified view is rendered by inverse warping with the average M.
+      validatedAffinities: [],
+      rectificationEnabled: false,
+      rectificationImageData: null,
+      rectificationTransform: null,
+      lastAffinityEstimate: null
     };
 
     let canvasHovered = false;
@@ -570,6 +585,23 @@
       }
     }
 
+    function refreshRectificationUI() {
+      if (validatedAffinityCount) validatedAffinityCount.textContent = String(state.validatedAffinities.length);
+      if (rectificationStateLabel) rectificationStateLabel.textContent = state.rectificationEnabled ? "ON" : "OFF";
+      if (currentAffinityCond) {
+        const cond = state.lastAffinityEstimate && Number.isFinite(state.lastAffinityEstimate.cond)
+          ? state.lastAffinityEstimate.cond
+          : null;
+        currentAffinityCond.textContent = cond ? cond.toFixed(2) : "—";
+      }
+      if (btnToggleRectification) {
+        btnToggleRectification.classList.toggle("is-info", !state.rectificationEnabled);
+        btnToggleRectification.classList.toggle("is-danger", state.rectificationEnabled);
+        const textSpan = btnToggleRectification.querySelector("span:last-child");
+        if (textSpan) textSpan.textContent = state.rectificationEnabled ? "Show Deformed" : "Rectify";
+      }
+    }
+
     function refreshAutocorrStateUI() {
       if (autocorrStateLabel) autocorrStateLabel.textContent = state.autocorrEnabled ? "ON" : "OFF";
       if (acorrPreview) acorrPreview.style.display = state.autocorrEnabled ? "block" : "none";
@@ -635,6 +667,7 @@
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
       refreshPeakStateUI();
+      refreshRectificationUI();
     }
 
     function syncControlsFromState() {
@@ -681,6 +714,7 @@
       refreshProjectionPanels();
       refreshAutocorrStateUI();
       refreshPeakStateUI();
+      refreshRectificationUI();
     }
 
     function updateStateFromControls() {
@@ -1162,14 +1196,21 @@
       else result = applyCrumpledProjection(state.sourceImageData);
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
+      recomputeRectification();
       redrawMainCanvas();
       if (state.autocorrEnabled) schedulePreviewRender();
     }
 
     function redrawMainCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      if (state.displayedImageData) ctx.putImageData(state.displayedImageData, 0, 0);
-      if (state.autocorrEnabled) {
+      const imgToDraw = (state.rectificationEnabled && state.rectificationImageData)
+        ? state.rectificationImageData
+        : state.displayedImageData;
+      if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
+
+      drawValidatedAffinityMarkers();
+
+      if (state.autocorrEnabled && !state.rectificationEnabled) {
         const half = Math.floor(state.patchSize / 2);
         const p = getActivePatchCenter();
         const x = Math.round(p.x) - half;
@@ -1180,6 +1221,180 @@
         ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
         ctx.restore();
       }
+    }
+
+    // =========================================================
+    // MANUAL AFFINITY VALIDATION + RECTIFICATION
+    // =========================================================
+    function solve2x2ForColumns(Uref, Vref, Uobs, Vobs) {
+      // Matrices are represented in display coordinates [x, y].
+      // We solve M * [Uref Vref] = [Uobs Vobs].
+      const a = Uref[0], b = Vref[0], c = Uref[1], d = Vref[1];
+      const det = a * d - b * c;
+      if (Math.abs(det) < 1e-9) return null;
+      const Rinv = [[d / det, -b / det], [-c / det, a / det]];
+      const O = [[Uobs[0], Vobs[0]], [Uobs[1], Vobs[1]]];
+      return [
+        [O[0][0] * Rinv[0][0] + O[0][1] * Rinv[1][0], O[0][0] * Rinv[0][1] + O[0][1] * Rinv[1][1]],
+        [O[1][0] * Rinv[0][0] + O[1][1] * Rinv[1][0], O[1][0] * Rinv[0][1] + O[1][1] * Rinv[1][1]]
+      ];
+    }
+
+    function mat2Cond(M) {
+      // Closed-form condition number for a 2x2 matrix using singular values.
+      const a = M[0][0], b = M[0][1], c = M[1][0], d = M[1][1];
+      const s = a * a + b * b + c * c + d * d;
+      const det = a * d - b * c;
+      const disc = Math.max(s * s - 4 * det * det, 0);
+      const l1 = (s + Math.sqrt(disc)) / 2;
+      const l2 = (s - Math.sqrt(disc)) / 2;
+      if (l2 <= 1e-18) return Infinity;
+      return Math.sqrt(l1 / l2);
+    }
+
+    function estimateCurrentAffinityFromDetection() {
+      if (!state.lastDetection) return null;
+      const p = getActivePatchCenter();
+      const computeSize = Math.min(state.previewComputeSize, state.patchSize);
+      const scale = state.patchSize / computeSize;
+
+      // detection.u_fin/v_fin are [dr, dc] in the autocorrelation compute grid.
+      // Convert to [x, y] = [dc, dr] in displayed-image pixels.
+      const Uobs = [state.lastDetection.u_fin[1] * scale, state.lastDetection.u_fin[0] * scale];
+      const Vobs = [state.lastDetection.v_fin[1] * scale, state.lastDetection.v_fin[0] * scale];
+
+      const refs = getTextureShiftVectorsSourcePx();
+      const Uref = [refs.U[0], refs.U[1]];
+      const Vref = [refs.V[0], refs.V[1]];
+      const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
+      if (!M) return null;
+      const cond = mat2Cond(M);
+      if (!Number.isFinite(cond) || cond > 1e12) return null;
+      return {
+        M,
+        cond,
+        center: { x: p.x, y: p.y },
+        patchSize: state.patchSize,
+        energy: Number(state.lastDetection.energy_final ?? NaN),
+        Uobs,
+        Vobs,
+        Uref,
+        Vref,
+        projectionMode: state.projectionModes[state.projectionIndex]
+      };
+    }
+
+    function averageValidatedTransform() {
+      if (!state.validatedAffinities.length) return null;
+      let wsum = 0;
+      const M = [[0, 0], [0, 0]];
+      let cx = 0;
+      let cy = 0;
+      for (const item of state.validatedAffinities) {
+        const qualityWeight = Number.isFinite(item.energy) ? clamp(item.energy, 0.05, 1.0) : 1.0;
+        const condWeight = 1.0 / Math.max(1.0, item.cond || 1.0);
+        const w = Math.max(0.02, qualityWeight * condWeight);
+        M[0][0] += w * item.M[0][0];
+        M[0][1] += w * item.M[0][1];
+        M[1][0] += w * item.M[1][0];
+        M[1][1] += w * item.M[1][1];
+        cx += w * item.center.x;
+        cy += w * item.center.y;
+        wsum += w;
+      }
+      if (wsum <= 0) return null;
+      M[0][0] /= wsum; M[0][1] /= wsum;
+      M[1][0] /= wsum; M[1][1] /= wsum;
+      cx /= wsum; cy /= wsum;
+      const cond = mat2Cond(M);
+      if (!Number.isFinite(cond) || cond > 1e12) return null;
+      return { M, center: { x: cx, y: cy }, cond };
+    }
+
+    function renderRectifiedWithTransform(transform) {
+      if (!state.displayedImageData || !transform) return null;
+      const w = state.displayedImageData.width;
+      const h = state.displayedImageData.height;
+      const out = new ImageData(w, h);
+      const dst = out.data;
+      const M = transform.M;
+      const cx = transform.center.x;
+      const cy = transform.center.y;
+
+      // Canvas inverse-warping convention:
+      // each output pixel is interpreted as a rectified/reference coordinate,
+      // then mapped back to the deformed image by M for sampling.
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const dx = x - cx;
+          const dy = y - cy;
+          const sx = M[0][0] * dx + M[0][1] * dy + cx;
+          const sy = M[1][0] * dx + M[1][1] * dy + cy;
+          const gray = sampleGrayBilinear(state.displayedImageData, sx, sy, 255);
+          setGrayPixel(dst, (y * w + x) * 4, gray);
+        }
+      }
+      return out;
+    }
+
+    function recomputeRectification() {
+      const transform = averageValidatedTransform();
+      state.rectificationTransform = transform;
+      state.rectificationImageData = transform ? renderRectifiedWithTransform(transform) : null;
+      if (!state.rectificationImageData) state.rectificationEnabled = false;
+      refreshRectificationUI();
+    }
+
+    function validateCurrentAffinity() {
+      if (!state.autocorrEnabled) state.autocorrEnabled = true;
+      if (!state.peaksEnabled) state.peaksEnabled = true;
+      const p = getActivePatchCenter();
+      renderAutocorrelationAt(p.x, p.y);
+      const estimate = estimateCurrentAffinityFromDetection();
+      state.lastAffinityEstimate = estimate;
+      if (!estimate) {
+        refreshRectificationUI();
+        redrawMainCanvas();
+        return;
+      }
+      state.validatedAffinities.push(estimate);
+      recomputeRectification();
+      refreshRectificationUI();
+      redrawMainCanvas();
+    }
+
+    function clearValidatedAffinities() {
+      state.validatedAffinities = [];
+      state.rectificationEnabled = false;
+      state.rectificationImageData = null;
+      state.rectificationTransform = null;
+      state.lastAffinityEstimate = null;
+      refreshRectificationUI();
+      redrawMainCanvas();
+    }
+
+    function drawValidatedAffinityMarkers() {
+      if (!state.validatedAffinities.length || state.rectificationEnabled) return;
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.font = "bold 12px Inter, Arial, sans-serif";
+      state.validatedAffinities.forEach((item, idx) => {
+        const x = item.center.x;
+        const y = item.center.y;
+        const r = Math.max(6, Math.min(14, item.patchSize * 0.08));
+        ctx.strokeStyle = "#2563eb";
+        ctx.fillStyle = "rgba(37, 99, 235, 0.16)";
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#2563eb";
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 3;
+        ctx.strokeText(String(idx + 1), x + r + 3, y - r - 3);
+        ctx.fillText(String(idx + 1), x + r + 3, y - r - 3);
+      });
+      ctx.restore();
     }
 
     // =========================================================
@@ -1792,8 +2007,16 @@
           detection = findHexagonJS(ac, computeSize, state.peakDetection, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
         }
         state.lastDetection = detection;
+        state.lastAffinityEstimate = estimateCurrentAffinityFromDetection();
+        refreshRectificationUI();
         const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
         drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
+      }
+
+      if (!state.peaksEnabled) {
+        state.lastDetection = null;
+        state.lastAffinityEstimate = null;
+        refreshRectificationUI();
       }
 
       if (acorrModeLabel) {
@@ -1825,6 +2048,11 @@
       state.lockedPatchX = state.mouseX;
       state.lockedPatchY = state.mouseY;
       state.lastDetection = null;
+      state.lastAffinityEstimate = null;
+      state.validatedAffinities = [];
+      state.rectificationEnabled = false;
+      state.rectificationImageData = null;
+      state.rectificationTransform = null;
       syncControlsFromState();
       renderGeneratedTexture();
       if (state.autocorrEnabled) {
@@ -1853,13 +2081,17 @@
     // =========================================================
     if (btnGenerate) {
       btnGenerate.addEventListener("click", () => {
+        clearValidatedAffinities();
         updateStateFromControls();
         renderGeneratedTexture();
       });
     }
 
     if (btnProjection) {
-      btnProjection.addEventListener("click", () => cycleProjectionMode());
+      btnProjection.addEventListener("click", () => {
+        clearValidatedAffinities();
+        cycleProjectionMode();
+      });
     }
 
     if (btnAutocorr) {
@@ -1892,6 +2124,23 @@
       });
     }
 
+    if (btnValidateAffinity) {
+      btnValidateAffinity.addEventListener("click", () => validateCurrentAffinity());
+    }
+
+    if (btnToggleRectification) {
+      btnToggleRectification.addEventListener("click", () => {
+        if (!state.rectificationImageData) recomputeRectification();
+        state.rectificationEnabled = !!state.rectificationImageData && !state.rectificationEnabled;
+        refreshRectificationUI();
+        redrawMainCanvas();
+      });
+    }
+
+    if (btnClearAffinities) {
+      btnClearAffinities.addEventListener("click", () => clearValidatedAffinities());
+    }
+
     if (btnResetParams) btnResetParams.addEventListener("click", () => resetAllParams());
 
     if (contrastSlider) {
@@ -1914,6 +2163,7 @@
     [texOccupancy, texDilation, texAngle, texShift, texBlur].forEach((el) => {
       if (!el) return;
       el.addEventListener("input", () => {
+        clearValidatedAffinities();
         updateStateFromControls();
         renderGeneratedTexture();
       });
@@ -1922,6 +2172,7 @@
     controlIds.forEach((id) => {
       if (!controls[id]) return;
       controls[id].addEventListener("input", () => {
+        clearValidatedAffinities();
         updateStateFromControls();
         applyCurrentProjection();
       });

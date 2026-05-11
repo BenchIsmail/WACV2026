@@ -71,6 +71,7 @@
     const validatedAffinityCount = document.getElementById("validated-affinity-count");
     const rectificationStateLabel = document.getElementById("rectification-state-label");
     const currentAffinityCond = document.getElementById("current-affinity-cond");
+    const validationStateLabel = document.getElementById("validation-state-label");
 
     const projectionModeLabel = document.getElementById("projection-mode-label");
     const patchSizeLabel = document.getElementById("patch-size-label");
@@ -249,9 +250,9 @@
 
       lastDetection: null,
 
-      // Manual rectification workflow. Each validated item stores a local
-      // deformation matrix M such that observed_peak ≈ M * reference_peak.
-      // The rectified view is rendered by inverse warping with the average M.
+      // Manual rectification workflow. Each validated item stores one user-accepted
+      // local deformation matrix M such that observed_peak ≈ M * reference_peak.
+      // The rectified view uses the average of all manually validated matrices.
       validatedAffinities: [],
       rectificationEnabled: false,
       rectificationImageData: null,
@@ -585,15 +586,13 @@
       }
     }
 
+    function setValidationMessage(message) {
+      if (validationStateLabel) validationStateLabel.textContent = message;
+    }
+
     function refreshRectificationUI() {
       if (validatedAffinityCount) validatedAffinityCount.textContent = String(state.validatedAffinities.length);
       if (rectificationStateLabel) rectificationStateLabel.textContent = state.rectificationEnabled ? "ON" : "OFF";
-      if (currentAffinityCond) {
-        const cond = state.lastAffinityEstimate && Number.isFinite(state.lastAffinityEstimate.cond)
-          ? state.lastAffinityEstimate.cond
-          : null;
-        currentAffinityCond.textContent = cond ? cond.toFixed(2) : "—";
-      }
       if (btnToggleRectification) {
         btnToggleRectification.classList.toggle("is-info", !state.rectificationEnabled);
         btnToggleRectification.classList.toggle("is-danger", state.rectificationEnabled);
@@ -1252,63 +1251,84 @@
       return Math.sqrt(l1 / l2);
     }
 
-    function estimateCurrentAffinityFromDetection() {
-      if (!state.lastDetection) return null;
+    function getDisplayedDetectionForValidation() {
+      // Important: validation must use the exact peaks currently displayed by Detect Peaks.
+      // We therefore only read state.lastDetection, which is updated by renderAutocorrelationAt().
       const p = getActivePatchCenter();
-      const computeSize = Math.min(state.previewComputeSize, state.patchSize);
+      const patchSize = state.patchSize;
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+
+      if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin) {
+        return { detection: state.lastDetection, computeSize, center: p };
+      }
+
+      return { detection: null, computeSize, center: p };
+    }
+
+    function estimateCurrentAffinityFromDetection() {
+      if (!state.displayedImageData) return null;
+      const fresh = getDisplayedDetectionForValidation();
+      const detection = fresh.detection;
+      if (!detection || !detection.u_fin || !detection.v_fin) {
+        setValidationMessage("No displayed peaks");
+        return null;
+      }
+
+      const computeSize = fresh.computeSize;
       const scale = state.patchSize / computeSize;
 
-      // detection.u_fin/v_fin are [dr, dc] in the autocorrelation compute grid.
-      // Convert to [x, y] = [dc, dr] in displayed-image pixels.
-      const Uobs = [state.lastDetection.u_fin[1] * scale, state.lastDetection.u_fin[0] * scale];
-      const Vobs = [state.lastDetection.v_fin[1] * scale, state.lastDetection.v_fin[0] * scale];
+      // detection.u_fin/v_fin are the exact displayed detected peaks, in [dr, dc].
+      // Convert to image coordinates [x, y] = [dc, dr] in displayed-image pixels.
+      const Uobs = [detection.u_fin[1] * scale, detection.u_fin[0] * scale];
+      const Vobs = [detection.v_fin[1] * scale, detection.v_fin[0] * scale];
 
       const refs = getTextureShiftVectorsSourcePx();
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
+
       const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
-      if (!M) return null;
-      const cond = mat2Cond(M);
-      if (!Number.isFinite(cond) || cond > 1e12) return null;
+      if (!M) {
+        // This is not a quality filter: it only means the reference basis cannot be solved.
+        setValidationMessage("Cannot solve basis");
+        return null;
+      }
+
       return {
         M,
-        cond,
-        center: { x: p.x, y: p.y },
+        center: { x: fresh.center.x, y: fresh.center.y },
         patchSize: state.patchSize,
-        energy: Number(state.lastDetection.energy_final ?? NaN),
+        energy: Number(detection.energy_final ?? NaN),
         Uobs,
         Vobs,
         Uref,
         Vref,
+        detection,
         projectionMode: state.projectionModes[state.projectionIndex]
       };
     }
 
     function averageValidatedTransform() {
       if (!state.validatedAffinities.length) return null;
-      let wsum = 0;
       const M = [[0, 0], [0, 0]];
       let cx = 0;
       let cy = 0;
+      const n = state.validatedAffinities.length;
+
+      // No filtering and no condition-number weighting: each manually validated patch counts once.
       for (const item of state.validatedAffinities) {
-        const qualityWeight = Number.isFinite(item.energy) ? clamp(item.energy, 0.05, 1.0) : 1.0;
-        const condWeight = 1.0 / Math.max(1.0, item.cond || 1.0);
-        const w = Math.max(0.02, qualityWeight * condWeight);
-        M[0][0] += w * item.M[0][0];
-        M[0][1] += w * item.M[0][1];
-        M[1][0] += w * item.M[1][0];
-        M[1][1] += w * item.M[1][1];
-        cx += w * item.center.x;
-        cy += w * item.center.y;
-        wsum += w;
+        M[0][0] += item.M[0][0];
+        M[0][1] += item.M[0][1];
+        M[1][0] += item.M[1][0];
+        M[1][1] += item.M[1][1];
+        cx += item.center.x;
+        cy += item.center.y;
       }
-      if (wsum <= 0) return null;
-      M[0][0] /= wsum; M[0][1] /= wsum;
-      M[1][0] /= wsum; M[1][1] /= wsum;
-      cx /= wsum; cy /= wsum;
-      const cond = mat2Cond(M);
-      if (!Number.isFinite(cond) || cond > 1e12) return null;
-      return { M, center: { x: cx, y: cy }, cond };
+
+      M[0][0] /= n; M[0][1] /= n;
+      M[1][0] /= n; M[1][1] /= n;
+      cx /= n; cy /= n;
+
+      return { M, center: { x: cx, y: cy } };
     }
 
     function renderRectifiedWithTransform(transform) {
@@ -1348,8 +1368,11 @@
     function validateCurrentAffinity() {
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
+
+      // Re-render once, then use exactly the peaks drawn by Detect Peaks in that render.
       const p = getActivePatchCenter();
       renderAutocorrelationAt(p.x, p.y);
+
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
       if (!estimate) {
@@ -1357,7 +1380,11 @@
         redrawMainCanvas();
         return;
       }
+
+      // Same detected vectors are allowed at different image positions.
+      // We intentionally do not deduplicate and do not reject by condition number.
       state.validatedAffinities.push(estimate);
+      setValidationMessage("OK - displayed peaks saved");
       recomputeRectification();
       refreshRectificationUI();
       redrawMainCanvas();
@@ -1369,6 +1396,7 @@
       state.rectificationImageData = null;
       state.rectificationTransform = null;
       state.lastAffinityEstimate = null;
+      setValidationMessage("Ready");
       refreshRectificationUI();
       redrawMainCanvas();
     }

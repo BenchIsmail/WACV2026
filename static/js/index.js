@@ -1213,42 +1213,6 @@
       if (state.autocorrEnabled) schedulePreviewRender();
     }
 
-    function drawActivePatchOverlay() {
-      if (!state.autocorrEnabled) return;
-
-      const half = Math.floor(state.patchSize / 2);
-      const p = getActivePatchCenter();
-      const x = Math.round(p.x) - half;
-      const y = Math.round(p.y) - half;
-      const cx = Math.round(p.x) + 0.5;
-      const cy = Math.round(p.y) + 0.5;
-      const color = state.lockedPatch ? "#22c55e" : "#00bcd4";
-
-      ctx.save();
-      ctx.strokeStyle = color;
-      ctx.fillStyle = color;
-      ctx.lineWidth = state.lockedPatch ? 3 : 2;
-      ctx.setLineDash([]);
-      ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
-
-      // Centre du patch : croix + cercle, toujours au-dessus de l'image.
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(cx - 11, cy);
-      ctx.lineTo(cx + 11, cy);
-      ctx.moveTo(cx, cy - 11);
-      ctx.lineTo(cx, cy + 11);
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, 5, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgba(255,255,255,0.95)";
-      ctx.stroke();
-      ctx.restore();
-    }
-
     function redrawMainCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       let imgToDraw = state.displayedImageData;
@@ -1257,7 +1221,35 @@
       if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
 
       drawValidatedAffinityMarkers();
-      drawActivePatchOverlay();
+
+      // Patch overlay: visible only on the deformed view, because validation is done
+      // on the deformed image. The center cross is drawn explicitly so the locked
+      // patch position stays easy to read.
+      if (state.autocorrEnabled && !state.rectificationEnabled && !state.differenceEnabled) {
+        const half = Math.floor(state.patchSize / 2);
+        const p = getActivePatchCenter();
+        const x = Math.round(p.x) - half;
+        const y = Math.round(p.y) - half;
+        ctx.save();
+        ctx.strokeStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
+        ctx.fillStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
+        ctx.lineWidth = state.lockedPatch ? 3 : 2;
+        ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
+
+        // Center marker of the active / locked patch.
+        const cx = Math.round(p.x) + 0.5;
+        const cy = Math.round(p.y) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - 9, cy);
+        ctx.lineTo(cx + 9, cy);
+        ctx.moveTo(cx, cy - 9);
+        ctx.lineTo(cx, cy + 9);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+      }
     }
 
     // =========================================================
@@ -2531,7 +2523,6 @@
         if (state.autocorrEnabled) {
           const p = getActivePatchCenter();
           renderAutocorrelationAt(p.x, p.y);
-          redrawMainCanvas();
         } else {
           redrawMainCanvas();
         }
@@ -2549,7 +2540,6 @@
         refreshPeakStateUI();
         const p = getActivePatchCenter();
         renderAutocorrelationAt(p.x, p.y);
-        redrawMainCanvas();
       });
     }
 
@@ -2675,7 +2665,6 @@
       state.differenceEnabled = false;
       refreshRectificationUI();
 
-      redrawMainCanvas();
       updateAutocorrPreviewPositionFromCanvasPoint(state.lockedPatchX, state.lockedPatchY);
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
       redrawMainCanvas();

@@ -64,6 +64,7 @@
     const btnResetParams = document.getElementById("btn-reset-params");
     const btnValidateAffinity = document.getElementById("btn-validate-affinity");
     const btnToggleRectification = document.getElementById("btn-toggle-rectification");
+    const btnTogglePatchView = document.getElementById("btn-toggle-patch-view");
     const btnClearAffinities = document.getElementById("btn-clear-affinities");
 
     let btnDetectPeaks = document.getElementById("btn-detect-peaks");
@@ -72,6 +73,9 @@
     const rectificationStateLabel = document.getElementById("rectification-state-label");
     const currentAffinityCond = document.getElementById("current-affinity-cond");
     const validationStateLabel = document.getElementById("validation-state-label");
+    const patchViewPanel = document.getElementById("patch-view-panel");
+    const patchViewGrid = document.getElementById("patch-view-grid");
+    const patchViewSummary = document.getElementById("patch-view-summary");
 
     const projectionModeLabel = document.getElementById("projection-mode-label");
     const patchSizeLabel = document.getElementById("patch-size-label");
@@ -256,6 +260,7 @@
       validatedAffinities: [],
       rectificationEnabled: false,
       differenceEnabled: false,
+      patchViewEnabled: false,
       rectificationImageData: null,
       differenceImageData: null,
       rectificationTransform: null,
@@ -1344,6 +1349,116 @@
       return out;
     }
 
+
+    function makePatchCanvasFromGrayArray(gray, patchSize, displaySize = 128) {
+      const c = document.createElement("canvas");
+      c.width = Math.max(32, Math.min(256, Math.round(displaySize)));
+      c.height = c.width;
+      const cctx = c.getContext("2d", { willReadFrequently: true });
+      const img = new ImageData(c.width, c.height);
+      for (let y = 0; y < c.height; y++) {
+        const sy = ((y + 0.5) / c.height) * patchSize - 0.5;
+        const y0 = Math.floor(sy);
+        const y1 = Math.min(patchSize - 1, Math.max(0, y0 + 1));
+        const fy = sy - y0;
+        const yy0 = Math.min(patchSize - 1, Math.max(0, y0));
+        for (let x = 0; x < c.width; x++) {
+          const sx = ((x + 0.5) / c.width) * patchSize - 0.5;
+          const x0 = Math.floor(sx);
+          const x1 = Math.min(patchSize - 1, Math.max(0, x0 + 1));
+          const fx = sx - x0;
+          const xx0 = Math.min(patchSize - 1, Math.max(0, x0));
+          const v00 = gray[yy0 * patchSize + xx0] ?? 255;
+          const v10 = gray[yy0 * patchSize + x1] ?? 255;
+          const v01 = gray[y1 * patchSize + xx0] ?? 255;
+          const v11 = gray[y1 * patchSize + x1] ?? 255;
+          const v0 = v00 * (1 - fx) + v10 * fx;
+          const v1 = v01 * (1 - fx) + v11 * fx;
+          const v = clamp(v0 * (1 - fy) + v1 * fy, 0, 255);
+          const idx = (y * c.width + x) * 4;
+          img.data[idx] = v;
+          img.data[idx + 1] = v;
+          img.data[idx + 2] = v;
+          img.data[idx + 3] = 255;
+        }
+      }
+      cctx.putImageData(img, 0, 0);
+      return c;
+    }
+
+    function appendPatchThumb(parent, label, gray, patchSize) {
+      const wrap = document.createElement("div");
+      wrap.className = "patch-thumb-wrap";
+      const canvasThumb = makePatchCanvasFromGrayArray(gray, patchSize, 128);
+      const caption = document.createElement("div");
+      caption.textContent = label;
+      wrap.appendChild(canvasThumb);
+      wrap.appendChild(caption);
+      parent.appendChild(wrap);
+    }
+
+    function refreshPatchViewButton() {
+      if (!btnTogglePatchView) return;
+      btnTogglePatchView.classList.toggle("is-link", state.patchViewEnabled);
+      btnTogglePatchView.classList.toggle("is-light", !state.patchViewEnabled);
+      const textSpan = btnTogglePatchView.querySelector("span:last-child");
+      if (textSpan) textSpan.textContent = state.patchViewEnabled ? "Hide Rectified Patches" : "Show Rectified Patches";
+    }
+
+    function renderValidatedPatchesPanel() {
+      if (!patchViewPanel || !patchViewGrid) return;
+      patchViewPanel.classList.toggle("is-active", state.patchViewEnabled);
+      refreshPatchViewButton();
+      patchViewGrid.innerHTML = "";
+
+      if (!state.patchViewEnabled) return;
+
+      const n = state.validatedAffinities.length;
+      if (patchViewSummary) {
+        patchViewSummary.textContent = n
+          ? `${n} validated patch${n > 1 ? "es" : ""}. Each row shows reference, deformed, and locally rectified patch.`
+          : "No validated patch yet.";
+      }
+
+      if (!n) {
+        const empty = document.createElement("div");
+        empty.className = "patch-card";
+        empty.textContent = "Validate at least one affinity to see its local rectification.";
+        patchViewGrid.appendChild(empty);
+        return;
+      }
+
+      state.validatedAffinities.forEach((item, idx) => {
+        const patchSize = item.patchSize || state.patchSize;
+        if (!item.sourcePatch || !item.deformedPatch || !item.rectifiedPatch) return;
+
+        const card = document.createElement("div");
+        card.className = "patch-card";
+
+        const title = document.createElement("div");
+        title.className = "patch-card-title";
+        title.textContent = `Patch ${idx + 1}`;
+
+        const meta = document.createElement("div");
+        meta.className = "patch-card-meta";
+        const cx = item.center ? item.center.x.toFixed(1) : "?";
+        const cy = item.center ? item.center.y.toFixed(1) : "?";
+        const score = Number.isFinite(item.phaseScore) ? item.phaseScore.toFixed(4) : "n/a";
+        meta.textContent = `center=(${cx}, ${cy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
+
+        const triplet = document.createElement("div");
+        triplet.className = "patch-triplet";
+        appendPatchThumb(triplet, "reference", item.sourcePatch, patchSize);
+        appendPatchThumb(triplet, "deformed", item.deformedPatch, patchSize);
+        appendPatchThumb(triplet, "rectified", item.rectifiedPatch, patchSize);
+
+        card.appendChild(title);
+        card.appendChild(meta);
+        card.appendChild(triplet);
+        patchViewGrid.appendChild(card);
+      });
+    }
+
     function nextPow2(n) {
       let p = 1;
       while (p < n) p <<= 1;
@@ -1474,6 +1589,7 @@
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
       const sourcePatch = extractGrayPatchArray(state.sourceImageData, center.x, center.y, state.patchSize);
+      const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
       const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
       const candidates = [];
 
@@ -1492,6 +1608,7 @@
           M,
           Arect,
           phaseScore,
+          rectifiedPatch,
           center: { ...center },
           patchSize: state.patchSize,
           Uobs,
@@ -1510,6 +1627,8 @@
 
       candidates.sort((a, b) => b.phaseScore - a.phaseScore);
       const best = candidates[0];
+      best.sourcePatch = sourcePatch;
+      best.deformedPatch = deformedPatch;
       best.allCandidates = candidates;
       return best;
     }
@@ -1818,6 +1937,7 @@
       setValidationMessage(`OK - ${estimate.pairName} selected by phase corr (${estimate.phaseScore.toFixed(4)})`);
       recomputeRectification();
       refreshRectificationUI();
+      renderValidatedPatchesPanel();
       redrawMainCanvas();
     }
 
@@ -1825,6 +1945,7 @@
       state.validatedAffinities = [];
       state.rectificationEnabled = false;
       state.differenceEnabled = false;
+      state.patchViewEnabled = false;
       state.rectificationImageData = null;
       state.differenceImageData = null;
       state.rectificationTransform = null;
@@ -1832,6 +1953,7 @@
       state.globalHomographyInfo = null;
       setValidationMessage("Ready");
       refreshRectificationUI();
+      renderValidatedPatchesPanel();
       redrawMainCanvas();
     }
 
@@ -2591,6 +2713,13 @@
         }
         refreshRectificationUI();
         redrawMainCanvas();
+      });
+    }
+
+    if (btnTogglePatchView) {
+      btnTogglePatchView.addEventListener("click", () => {
+        state.patchViewEnabled = !state.patchViewEnabled;
+        renderValidatedPatchesPanel();
       });
     }
 

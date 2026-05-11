@@ -255,12 +255,8 @@
       // The rectified view uses the average of all manually validated matrices.
       validatedAffinities: [],
       rectificationEnabled: false,
-      differenceEnabled: false,
       rectificationImageData: null,
-      differenceImageData: null,
       rectificationTransform: null,
-      globalHomography: null,
-      globalHomographyInfo: null,
       lastAffinityEstimate: null
     };
 
@@ -596,21 +592,12 @@
 
     function refreshRectificationUI() {
       if (validatedAffinityCount) validatedAffinityCount.textContent = String(state.validatedAffinities.length);
-      if (rectificationStateLabel) {
-        rectificationStateLabel.textContent = state.rectificationEnabled
-          ? "RECTIFIED"
-          : (state.differenceEnabled ? "DIFFERENCE" : "OFF");
-      }
+      if (rectificationStateLabel) rectificationStateLabel.textContent = state.rectificationEnabled ? "ON" : "OFF";
       if (btnToggleRectification) {
-        btnToggleRectification.classList.toggle("is-info", !state.rectificationEnabled && !state.differenceEnabled);
+        btnToggleRectification.classList.toggle("is-info", !state.rectificationEnabled);
         btnToggleRectification.classList.toggle("is-danger", state.rectificationEnabled);
-        btnToggleRectification.classList.toggle("is-warning", state.differenceEnabled);
         const textSpan = btnToggleRectification.querySelector("span:last-child");
-        if (textSpan) {
-          textSpan.textContent = state.rectificationEnabled
-            ? "Show Difference"
-            : (state.differenceEnabled ? "Show Deformed" : "Rectify");
-        }
+        if (textSpan) textSpan.textContent = state.rectificationEnabled ? "Show Deformed" : "Rectify";
       }
     }
 
@@ -1215,39 +1202,22 @@
 
     function redrawMainCanvas() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      let imgToDraw = state.displayedImageData;
-      if (state.rectificationEnabled && state.rectificationImageData) imgToDraw = state.rectificationImageData;
-      else if (state.differenceEnabled && state.differenceImageData) imgToDraw = state.differenceImageData;
+      const imgToDraw = (state.rectificationEnabled && state.rectificationImageData)
+        ? state.rectificationImageData
+        : state.displayedImageData;
       if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
 
       drawValidatedAffinityMarkers();
 
-      // Patch overlay: visible only on the deformed view, because validation is done
-      // on the deformed image. The center cross is drawn explicitly so the locked
-      // patch position stays easy to read.
-      if (state.autocorrEnabled && !state.rectificationEnabled && !state.differenceEnabled) {
+      if (state.autocorrEnabled && !state.rectificationEnabled) {
         const half = Math.floor(state.patchSize / 2);
         const p = getActivePatchCenter();
         const x = Math.round(p.x) - half;
         const y = Math.round(p.y) - half;
         ctx.save();
         ctx.strokeStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
-        ctx.fillStyle = state.lockedPatch ? "#22c55e" : "#00bcd4";
         ctx.lineWidth = state.lockedPatch ? 3 : 2;
         ctx.strokeRect(x + 0.5, y + 0.5, state.patchSize, state.patchSize);
-
-        // Center marker of the active / locked patch.
-        const cx = Math.round(p.x) + 0.5;
-        const cy = Math.round(p.y) + 0.5;
-        ctx.beginPath();
-        ctx.moveTo(cx - 9, cy);
-        ctx.lineTo(cx + 9, cy);
-        ctx.moveTo(cx, cy - 9);
-        ctx.lineTo(cx, cy + 9);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(cx, cy, 4, 0, 2 * Math.PI);
-        ctx.fill();
         ctx.restore();
       }
     }
@@ -1256,6 +1226,8 @@
     // MANUAL AFFINITY VALIDATION + RECTIFICATION
     // =========================================================
     function solve2x2ForColumns(Uref, Vref, Uobs, Vobs) {
+      // Matrices are represented in display coordinates [x, y].
+      // We solve M * [Uref Vref] = [Uobs Vobs].
       const a = Uref[0], b = Vref[0], c = Uref[1], d = Vref[1];
       const det = a * d - b * c;
       if (Math.abs(det) < 1e-9) return null;
@@ -1267,523 +1239,140 @@
       ];
     }
 
+    function mat2Cond(M) {
+      // Closed-form condition number for a 2x2 matrix using singular values.
+      const a = M[0][0], b = M[0][1], c = M[1][0], d = M[1][1];
+      const s = a * a + b * b + c * c + d * d;
+      const det = a * d - b * c;
+      const disc = Math.max(s * s - 4 * det * det, 0);
+      const l1 = (s + Math.sqrt(disc)) / 2;
+      const l2 = (s - Math.sqrt(disc)) / 2;
+      if (l2 <= 1e-18) return Infinity;
+      return Math.sqrt(l1 / l2);
+    }
+
     function getDisplayedDetectionForValidation() {
+      // Important: validation must use the exact peaks currently displayed by Detect Peaks.
+      // We therefore only read state.lastDetection, which is updated by renderAutocorrelationAt().
       const p = getActivePatchCenter();
       const patchSize = state.patchSize;
       const computeSize = Math.min(state.previewComputeSize, patchSize);
-      if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin && state.lastDetection.w_fin) {
+
+      if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin) {
         return { detection: state.lastDetection, computeSize, center: p };
       }
+
       return { detection: null, computeSize, center: p };
     }
 
-    function buildOrdered6CandidatesXY(detection, scale) {
-      const U = [detection.u_fin[1] * scale, detection.u_fin[0] * scale];
-      const V = [detection.v_fin[1] * scale, detection.v_fin[0] * scale];
-      const W = [detection.w_fin[1] * scale, detection.w_fin[0] * scale];
-      return [
-        { label: "+U", vec: U },
-        { label: "+V", vec: V },
-        { label: "-W", vec: [-W[0], -W[1]] },
-        { label: "-U", vec: [-U[0], -U[1]] },
-        { label: "-V", vec: [-V[0], -V[1]] },
-        { label: "+W", vec: W }
-      ];
-    }
-
-    function extractGrayPatchArray(imageData, cx, cy, patchSize) {
-      const out = new Float64Array(patchSize * patchSize);
-      const half = patchSize / 2;
-      let k = 0;
-      for (let j = 0; j < patchSize; j++) {
-        const yy = cy - half + (j + 0.5);
-        for (let i = 0; i < patchSize; i++) {
-          const xx = cx - half + (i + 0.5);
-          out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
-        }
-      }
-      return out;
-    }
-
-    function rectifyPatchWithMatrix(imageData, cx, cy, patchSize, M) {
-      const out = new Float64Array(patchSize * patchSize);
-      const half = patchSize / 2;
-      let k = 0;
-      for (let j = 0; j < patchSize; j++) {
-        const dy = (j + 0.5) - half;
-        for (let i = 0; i < patchSize; i++) {
-          const dx = (i + 0.5) - half;
-          const sx = cx + M[0][0] * dx + M[0][1] * dy;
-          const sy = cy + M[1][0] * dx + M[1][1] * dy;
-          out[k++] = sampleGrayBilinear(imageData, sx, sy, 255);
-        }
-      }
-      return out;
-    }
-
-    function nextPow2(n) {
-      let p = 1;
-      while (p < n) p <<= 1;
-      return p;
-    }
-
-    function fft1d(re, im, inverse = false) {
-      const n = re.length;
-      let j = 0;
-      for (let i = 1; i < n; i++) {
-        let bit = n >> 1;
-        while (j & bit) { j ^= bit; bit >>= 1; }
-        j ^= bit;
-        if (i < j) {
-          let tr = re[i]; re[i] = re[j]; re[j] = tr;
-          let ti = im[i]; im[i] = im[j]; im[j] = ti;
-        }
-      }
-      for (let len = 2; len <= n; len <<= 1) {
-        const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
-        const wlenCos = Math.cos(ang);
-        const wlenSin = Math.sin(ang);
-        for (let i = 0; i < n; i += len) {
-          let wCos = 1.0, wSin = 0.0;
-          for (let j2 = 0; j2 < len / 2; j2++) {
-            const uRe = re[i + j2], uIm = im[i + j2];
-            const vRe0 = re[i + j2 + len / 2], vIm0 = im[i + j2 + len / 2];
-            const vRe = vRe0 * wCos - vIm0 * wSin;
-            const vIm = vRe0 * wSin + vIm0 * wCos;
-            re[i + j2] = uRe + vRe;
-            im[i + j2] = uIm + vIm;
-            re[i + j2 + len / 2] = uRe - vRe;
-            im[i + j2 + len / 2] = uIm - vIm;
-            const nwCos = wCos * wlenCos - wSin * wlenSin;
-            const nwSin = wCos * wlenSin + wSin * wlenCos;
-            wCos = nwCos; wSin = nwSin;
-          }
-        }
-      }
-      if (inverse) {
-        for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
-      }
-    }
-
-    function fft2d(re, im, w, h, inverse = false) {
-      const rowRe = new Float64Array(w);
-      const rowIm = new Float64Array(w);
-      for (let y = 0; y < h; y++) {
-        const off = y * w;
-        for (let x = 0; x < w; x++) { rowRe[x] = re[off + x]; rowIm[x] = im[off + x]; }
-        fft1d(rowRe, rowIm, inverse);
-        for (let x = 0; x < w; x++) { re[off + x] = rowRe[x]; im[off + x] = rowIm[x]; }
-      }
-      const colRe = new Float64Array(h);
-      const colIm = new Float64Array(h);
-      for (let x = 0; x < w; x++) {
-        for (let y = 0; y < h; y++) {
-          const idx = y * w + x;
-          colRe[y] = re[idx]; colIm[y] = im[idx];
-        }
-        fft1d(colRe, colIm, inverse);
-        for (let y = 0; y < h; y++) {
-          const idx = y * w + x;
-          re[idx] = colRe[y]; im[idx] = colIm[y];
-        }
-      }
-    }
-
-    function phaseCorrelationScoreArrays(a, b, w, h) {
-      const N = nextPow2(Math.max(w, h));
-      const size = N * N;
-      const ar = new Float64Array(size), ai = new Float64Array(size);
-      const br = new Float64Array(size), bi = new Float64Array(size);
-      let meanA = 0.0, meanB = 0.0;
-      for (let i = 0; i < a.length; i++) meanA += a[i];
-      for (let i = 0; i < b.length; i++) meanB += b[i];
-      meanA /= Math.max(1, a.length);
-      meanB /= Math.max(1, b.length);
-      for (let y = 0; y < h; y++) {
-        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
-        for (let x = 0; x < w; x++) {
-          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
-          const win = wx * wy;
-          const idx0 = y * w + x;
-          const idx = y * N + x;
-          ar[idx] = (a[idx0] - meanA) * win;
-          br[idx] = (b[idx0] - meanB) * win;
-        }
-      }
-      fft2d(ar, ai, N, N, false);
-      fft2d(br, bi, N, N, false);
-      const cr = new Float64Array(size), ci = new Float64Array(size);
-      for (let i = 0; i < size; i++) {
-        const re = ar[i] * br[i] + ai[i] * bi[i];
-        const im = ai[i] * br[i] - ar[i] * bi[i];
-        const mag = Math.hypot(re, im);
-        if (mag > 1e-12) {
-          cr[i] = re / mag;
-          ci[i] = im / mag;
-        } else {
-          cr[i] = 0.0;
-          ci[i] = 0.0;
-        }
-      }
-      fft2d(cr, ci, N, N, true);
-      let best = -Infinity;
-      for (let i = 0; i < size; i++) {
-        const v = Math.hypot(cr[i], ci[i]);
-        if (v > best) best = v;
-      }
-      return best;
-    }
-
     function estimateCurrentAffinityFromDetection() {
-      if (!state.displayedImageData || !state.sourceImageData) return null;
+      if (!state.displayedImageData) return null;
       const fresh = getDisplayedDetectionForValidation();
       const detection = fresh.detection;
-      if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
+      if (!detection || !detection.u_fin || !detection.v_fin) {
         setValidationMessage("No displayed peaks");
         return null;
       }
 
       const computeSize = fresh.computeSize;
       const scale = state.patchSize / computeSize;
-      const ordered6 = buildOrdered6CandidatesXY(detection, scale);
+
+      // detection.u_fin/v_fin are the exact displayed detected peaks, in [dr, dc].
+      // Convert to image coordinates [x, y] = [dc, dr] in displayed-image pixels.
+      const Uobs = [detection.u_fin[1] * scale, detection.u_fin[0] * scale];
+      const Vobs = [detection.v_fin[1] * scale, detection.v_fin[0] * scale];
+
       const refs = getTextureShiftVectorsSourcePx();
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
-      const center = { x: fresh.center.x, y: fresh.center.y };
-      const sourcePatch = extractGrayPatchArray(state.sourceImageData, center.x, center.y, state.patchSize);
-      const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
-      const candidates = [];
 
-      for (const [i, j] of idxPairs) {
-        const Uobs = ordered6[i].vec;
-        const Vobs = ordered6[j].vec;
-        const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
-        if (!M) continue;
-        const Arect = mat2Inv(M);
-        if (!Arect) continue;
-        const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
-        const phaseScore = phaseCorrelationScoreArrays(sourcePatch, rectifiedPatch, state.patchSize, state.patchSize);
-        candidates.push({
-          pairIndices: [i, j],
-          pairName: `${ordered6[i].label}, ${ordered6[j].label}`,
-          M,
-          Arect,
-          phaseScore,
-          center: { ...center },
-          patchSize: state.patchSize,
-          Uobs,
-          Vobs,
-          Uref,
-          Vref,
-          detection,
-          projectionMode: state.projectionModes[state.projectionIndex]
-        });
-      }
-
-      if (!candidates.length) {
-        setValidationMessage("No solvable affinity from displayed peaks");
+      const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
+      if (!M) {
+        // This is not a quality filter: it only means the reference basis cannot be solved.
+        setValidationMessage("Cannot solve basis");
         return null;
       }
 
-      candidates.sort((a, b) => b.phaseScore - a.phaseScore);
-      const best = candidates[0];
-      best.allCandidates = candidates;
-      return best;
-    }
-
-    function homogeneous2(y) {
-      return [y[0], y[1], 1.0];
-    }
-
-    function embedHomography6(h) {
-      return [
-        [h[0], h[1], 0.0],
-        [h[2], h[3], 0.0],
-        [h[4], h[5], 1.0]
-      ];
-    }
-
-    function mat3Mul(A, B) {
-      const C = Array.from({ length: 3 }, () => [0, 0, 0]);
-      for (let i = 0; i < 3; i++) {
-        for (let j = 0; j < 3; j++) {
-          let s = 0;
-          for (let k = 0; k < 3; k++) s += A[i][k] * B[k][j];
-          C[i][j] = s;
-        }
-      }
-      return C;
-    }
-
-    function mat3MulVec(A, v) {
-      return [
-        A[0][0] * v[0] + A[0][1] * v[1] + A[0][2] * v[2],
-        A[1][0] * v[0] + A[1][1] * v[1] + A[1][2] * v[2],
-        A[2][0] * v[0] + A[2][1] * v[1] + A[2][2] * v[2]
-      ];
-    }
-
-    function invert3x3(M, eps = 1e-12) {
-      const a = M[0][0], b = M[0][1], c = M[0][2];
-      const d = M[1][0], e = M[1][1], f = M[1][2];
-      const g = M[2][0], h = M[2][1], i = M[2][2];
-      const A = e * i - f * h;
-      const B = -(d * i - f * g);
-      const C = d * h - e * g;
-      const D = -(b * i - c * h);
-      const E = a * i - c * g;
-      const F = -(a * h - b * g);
-      const G = b * f - c * e;
-      const H = -(a * f - c * d);
-      const I = a * e - b * d;
-      const det = a * A + b * B + c * C;
-      if (Math.abs(det) < eps || !Number.isFinite(det)) return null;
-      const invDet = 1.0 / det;
-      return [
-        [A * invDet, D * invDet, G * invDet],
-        [B * invDet, E * invDet, H * invDet],
-        [C * invDet, F * invDet, I * invDet]
-      ];
-    }
-
-    function applyHomographyPoint(H, pt) {
-      const p = mat3MulVec(H, [pt[0], pt[1], 1.0]);
-      const w = Math.abs(p[2]) < 1e-12 ? 1e-12 : p[2];
-      return [p[0] / w, p[1] / w];
-    }
-
-    function jacobianHomography(H, yi) {
-      const num = [
-        [H[0][0] - yi[0] * H[2][0], H[0][1] - yi[0] * H[2][1]],
-        [H[1][0] - yi[1] * H[2][0], H[1][1] - yi[1] * H[2][1]]
-      ];
-      const Hinv = invert3x3(H);
-      if (!Hinv) throw new Error("Singular homography");
-      let invh = mat3MulVec(Hinv, homogeneous2(yi));
-      const ww = Math.abs(invh[2]) < 1e-12 ? 1e-12 : invh[2];
-      invh = [invh[0] / ww, invh[1] / ww, 1.0];
-      const den = H[2][0] * invh[0] + H[2][1] * invh[1] + H[2][2] * invh[2];
-      if (!Number.isFinite(den) || Math.abs(den) < 1e-12) throw new Error("Invalid jacobian denominator");
-      return [
-        [num[0][0] / den, num[0][1] / den],
-        [num[1][0] / den, num[1][1] / den]
-      ];
-    }
-
-    function normalizePoints(ys) {
-      let cx = 0.0, cy = 0.0;
-      for (const p of ys) { cx += p[0]; cy += p[1]; }
-      cx /= Math.max(1, ys.length); cy /= Math.max(1, ys.length);
-      let d = 0.0;
-      for (const p of ys) d += Math.hypot(p[0] - cx, p[1] - cy);
-      d /= Math.max(1, ys.length);
-      const s = d < 1e-12 ? 1.0 : Math.SQRT2 / d;
-      const T = [[s, 0.0, -s * cx], [0.0, s, -s * cy], [0.0, 0.0, 1.0]];
-      const Tinv = [[1/s, 0.0, cx], [0.0, 1/s, cy], [0.0, 0.0, 1.0]];
-      const ysN = ys.map((p) => applyHomographyPoint(T, p));
-      return { ysN, T, Tinv };
-    }
-
-    function denormalizeHomography(Hn, T) {
-      const Tinv = invert3x3(T);
-      if (!Tinv) return Hn;
-      let H = mat3Mul(mat3Mul(Tinv, Hn), T);
-      if (Math.abs(H[2][2]) > 1e-12) {
-        const s = H[2][2];
-        H = H.map((row) => row.map((v) => v / s));
-      }
-      return H;
-    }
-
-    function residualVectorHomography(h, As, ys) {
-      const H = embedHomography6(h);
-      const invH = invert3x3(H);
-      const detH = H[0][0]*(H[1][1]*H[2][2]-H[1][2]*H[2][1]) - H[0][1]*(H[1][0]*H[2][2]-H[1][2]*H[2][0]) + H[0][2]*(H[1][0]*H[2][1]-H[1][1]*H[2][0]);
-      if (!invH || !Number.isFinite(detH) || Math.abs(detH) < 1e-12) {
-        return new Float64Array(4 * As.length).fill(1e6);
-      }
-      const out = new Float64Array(4 * As.length);
-      let k = 0;
-      for (let idx = 0; idx < As.length; idx++) {
-        const Aobs = As[idx];
-        const yi = ys[idx];
-        try {
-          const J = jacobianHomography(H, yi);
-          out[k++] = Aobs[0][0] - J[0][0];
-          out[k++] = Aobs[0][1] - J[0][1];
-          out[k++] = Aobs[1][0] - J[1][0];
-          out[k++] = Aobs[1][1] - J[1][1];
-        } catch (e) {
-          out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6;
-        }
-      }
-      return out;
-    }
-
-    function vecNorm(v) {
-      let s = 0.0;
-      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
-      return Math.sqrt(s);
-    }
-
-    function meanSquared(v) {
-      let s = 0.0;
-      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
-      return s / Math.max(1, v.length);
-    }
-
-    function solveLinearSystem(A, b) {
-      const n = A.length;
-      const M = A.map((row, i) => row.slice().concat([b[i]]));
-      for (let k = 0; k < n; k++) {
-        let piv = k;
-        let best = Math.abs(M[k][k]);
-        for (let i = k + 1; i < n; i++) {
-          const v = Math.abs(M[i][k]);
-          if (v > best) { best = v; piv = i; }
-        }
-        if (best < 1e-12) return null;
-        if (piv !== k) { const tmp = M[k]; M[k] = M[piv]; M[piv] = tmp; }
-        const diag = M[k][k];
-        for (let j = k; j <= n; j++) M[k][j] /= diag;
-        for (let i = 0; i < n; i++) {
-          if (i === k) continue;
-          const f = M[i][k];
-          for (let j = k; j <= n; j++) M[i][j] -= f * M[k][j];
-        }
-      }
-      return M.map((row) => row[n]);
-    }
-
-    function optimizeLeastSquaresHomographyJS(As, ys, maxIter = 80, usePointNormalization = true) {
-      let ysOpt = ys.slice();
-      let T = [[1,0,0],[0,1,0],[0,0,1]];
-      if (usePointNormalization) {
-        const norm = normalizePoints(ys);
-        ysOpt = norm.ysN;
-        T = norm.T;
-      }
-      let x = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-      let lambda = 1e-2;
-      let r = residualVectorHomography(x, As, ysOpt);
-      let cost = meanSquared(r);
-      for (let it = 0; it < maxIter; it++) {
-        const m = r.length;
-        const p = x.length;
-        const J = Array.from({ length: m }, () => new Array(p).fill(0.0));
-        for (let j = 0; j < p; j++) {
-          const eps = 1e-5 * Math.max(1.0, Math.abs(x[j]));
-          const xp = x.slice(); xp[j] += eps;
-          const xm = x.slice(); xm[j] -= eps;
-          const rp = residualVectorHomography(xp, As, ysOpt);
-          const rm = residualVectorHomography(xm, As, ysOpt);
-          for (let i = 0; i < m; i++) J[i][j] = (rp[i] - rm[i]) / (2 * eps);
-        }
-        const JTJ = Array.from({ length: p }, () => new Array(p).fill(0.0));
-        const JTr = new Array(p).fill(0.0);
-        for (let i = 0; i < m; i++) {
-          for (let a = 0; a < p; a++) {
-            JTr[a] += J[i][a] * r[i];
-            for (let b = 0; b < p; b++) JTJ[a][b] += J[i][a] * J[i][b];
-          }
-        }
-        for (let a = 0; a < p; a++) JTJ[a][a] += lambda;
-        const rhs = JTr.map((v) => -v);
-        const delta = solveLinearSystem(JTJ, rhs);
-        if (!delta) break;
-        const xTrial = x.map((v, i) => v + delta[i]);
-        const rTrial = residualVectorHomography(xTrial, As, ysOpt);
-        const costTrial = meanSquared(rTrial);
-        if (costTrial < cost) {
-          x = xTrial;
-          r = rTrial;
-          cost = costTrial;
-          lambda *= 0.6;
-          if (vecNorm(delta) < 1e-8) break;
-        } else {
-          lambda *= 2.5;
-        }
-      }
-      const Hn = embedHomography6(x);
-      const H = usePointNormalization ? denormalizeHomography(Hn, T) : Hn;
-      const residualsFinal = residualVectorHomography([H[0][0], H[0][1], H[1][0], H[1][1], H[2][0], H[2][1]], As, ys);
       return {
-        H_3x3: H,
-        H_3x2: [[H[0][0], H[0][1]], [H[1][0], H[1][1]], [H[2][0], H[2][1]]],
-        cost: meanSquared(residualsFinal),
-        info: { success: true, iterations: maxIter, raw_result_x: x.slice() }
+        M,
+        center: { x: fresh.center.x, y: fresh.center.y },
+        patchSize: state.patchSize,
+        energy: Number(detection.energy_final ?? NaN),
+        Uobs,
+        Vobs,
+        Uref,
+        Vref,
+        detection,
+        projectionMode: state.projectionModes[state.projectionIndex]
       };
     }
 
-    function renderRectifiedWithHomography(H) {
-      if (!state.displayedImageData || !H) return null;
-      const Hinv = invert3x3(H);
-      if (!Hinv) return null;
+    function averageValidatedTransform() {
+      if (!state.validatedAffinities.length) return null;
+      const M = [[0, 0], [0, 0]];
+      let cx = 0;
+      let cy = 0;
+      const n = state.validatedAffinities.length;
+
+      // No filtering and no condition-number weighting: each manually validated patch counts once.
+      for (const item of state.validatedAffinities) {
+        M[0][0] += item.M[0][0];
+        M[0][1] += item.M[0][1];
+        M[1][0] += item.M[1][0];
+        M[1][1] += item.M[1][1];
+        cx += item.center.x;
+        cy += item.center.y;
+      }
+
+      M[0][0] /= n; M[0][1] /= n;
+      M[1][0] /= n; M[1][1] /= n;
+      cx /= n; cy /= n;
+
+      return { M, center: { x: cx, y: cy } };
+    }
+
+    function renderRectifiedWithTransform(transform) {
+      if (!state.displayedImageData || !transform) return null;
       const w = state.displayedImageData.width;
       const h = state.displayedImageData.height;
       const out = new ImageData(w, h);
       const dst = out.data;
+      const M = transform.M;
+      const cx = transform.center.x;
+      const cy = transform.center.y;
+
+      // Canvas inverse-warping convention:
+      // each output pixel is interpreted as a rectified/reference coordinate,
+      // then mapped back to the deformed image by M for sampling.
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const src = applyHomographyPoint(Hinv, [x, y]);
-          const gray = sampleGrayBilinear(state.displayedImageData, src[0], src[1], 255);
+          const dx = x - cx;
+          const dy = y - cy;
+          const sx = M[0][0] * dx + M[0][1] * dy + cx;
+          const sy = M[1][0] * dx + M[1][1] * dy + cy;
+          const gray = sampleGrayBilinear(state.displayedImageData, sx, sy, 255);
           setGrayPixel(dst, (y * w + x) * 4, gray);
         }
       }
       return out;
     }
 
-    function makeDifferenceImage(imageA, imageB) {
-      if (!imageA || !imageB || imageA.width !== imageB.width || imageA.height !== imageB.height) return null;
-      const out = new ImageData(imageA.width, imageA.height);
-      const n = imageA.width * imageA.height;
-      for (let i = 0; i < n; i++) {
-        const ia = i * 4;
-        const ga = imageA.data[ia];
-        const gb = imageB.data[ia];
-        const d = Math.min(255, Math.abs(ga - gb) * 4.0);
-        out.data[ia] = d;
-        out.data[ia + 1] = d;
-        out.data[ia + 2] = d;
-        out.data[ia + 3] = 255;
-      }
-      return out;
-    }
-
     function recomputeRectification() {
-      state.rectificationTransform = null;
-      state.globalHomography = null;
-      state.globalHomographyInfo = null;
-      state.rectificationImageData = null;
-      state.differenceImageData = null;
-      if (state.validatedAffinities.length < 2) {
-        state.rectificationEnabled = false;
-        state.differenceEnabled = false;
-        refreshRectificationUI();
-        return;
-      }
-      const As = state.validatedAffinities.map((item) => item.Arect);
-      const ys = state.validatedAffinities.map((item) => [item.center.x, item.center.y]);
-      const opt = optimizeLeastSquaresHomographyJS(As, ys, 80, true);
-      state.rectificationTransform = opt;
-      state.globalHomography = opt.H_3x3;
-      state.globalHomographyInfo = opt.info;
-      state.rectificationImageData = renderRectifiedWithHomography(opt.H_3x3);
-      state.differenceImageData = (state.rectificationImageData && state.sourceImageData)
-        ? makeDifferenceImage(state.sourceImageData, state.rectificationImageData)
-        : null;
-      if (!state.rectificationImageData) {
-        state.rectificationEnabled = false;
-        state.differenceEnabled = false;
-      }
+      const transform = averageValidatedTransform();
+      state.rectificationTransform = transform;
+      state.rectificationImageData = transform ? renderRectifiedWithTransform(transform) : null;
+      if (!state.rectificationImageData) state.rectificationEnabled = false;
       refreshRectificationUI();
     }
 
     function validateCurrentAffinity() {
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
+
+      // Re-render once, then use exactly the peaks drawn by Detect Peaks in that render.
       const p = getActivePatchCenter();
       renderAutocorrelationAt(p.x, p.y);
+
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
       if (!estimate) {
@@ -1791,8 +1380,11 @@
         redrawMainCanvas();
         return;
       }
+
+      // Same detected vectors are allowed at different image positions.
+      // We intentionally do not deduplicate and do not reject by condition number.
       state.validatedAffinities.push(estimate);
-      setValidationMessage(`OK - ${estimate.pairName} selected by phase corr (${estimate.phaseScore.toFixed(4)})`);
+      setValidationMessage("OK - displayed peaks saved");
       recomputeRectification();
       refreshRectificationUI();
       redrawMainCanvas();
@@ -1801,15 +1393,36 @@
     function clearValidatedAffinities() {
       state.validatedAffinities = [];
       state.rectificationEnabled = false;
-      state.differenceEnabled = false;
       state.rectificationImageData = null;
-      state.differenceImageData = null;
       state.rectificationTransform = null;
-      state.globalHomography = null;
-      state.globalHomographyInfo = null;
+      state.lastAffinityEstimate = null;
       setValidationMessage("Ready");
       refreshRectificationUI();
       redrawMainCanvas();
+    }
+
+    function drawValidatedAffinityMarkers() {
+      if (!state.validatedAffinities.length || state.rectificationEnabled) return;
+      ctx.save();
+      ctx.lineWidth = 2;
+      ctx.font = "bold 12px Inter, Arial, sans-serif";
+      state.validatedAffinities.forEach((item, idx) => {
+        const x = item.center.x;
+        const y = item.center.y;
+        const r = Math.max(6, Math.min(14, item.patchSize * 0.08));
+        ctx.strokeStyle = "#2563eb";
+        ctx.fillStyle = "rgba(37, 99, 235, 0.16)";
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#2563eb";
+        ctx.strokeStyle = "rgba(255,255,255,0.9)";
+        ctx.lineWidth = 3;
+        ctx.strokeText(String(idx + 1), x + r + 3, y - r - 3);
+        ctx.fillText(String(idx + 1), x + r + 3, y - r - 3);
+      });
+      ctx.restore();
     }
 
     // =========================================================
@@ -2466,12 +2079,8 @@
       state.lastAffinityEstimate = null;
       state.validatedAffinities = [];
       state.rectificationEnabled = false;
-      state.differenceEnabled = false;
       state.rectificationImageData = null;
-      state.differenceImageData = null;
       state.rectificationTransform = null;
-      state.globalHomography = null;
-      state.globalHomographyInfo = null;
       syncControlsFromState();
       renderGeneratedTexture();
       if (state.autocorrEnabled) {
@@ -2550,22 +2159,7 @@
     if (btnToggleRectification) {
       btnToggleRectification.addEventListener("click", () => {
         if (!state.rectificationImageData) recomputeRectification();
-        if (!state.rectificationImageData) {
-          setValidationMessage("Need at least 2 validated affinities");
-          refreshRectificationUI();
-          redrawMainCanvas();
-          return;
-        }
-        if (!state.rectificationEnabled && !state.differenceEnabled) {
-          state.rectificationEnabled = true;
-          state.differenceEnabled = false;
-        } else if (state.rectificationEnabled) {
-          state.rectificationEnabled = false;
-          state.differenceEnabled = true;
-        } else {
-          state.rectificationEnabled = false;
-          state.differenceEnabled = false;
-        }
+        state.rectificationEnabled = !!state.rectificationImageData && !state.rectificationEnabled;
         refreshRectificationUI();
         redrawMainCanvas();
       });
@@ -2657,17 +2251,8 @@
       state.lockedPatch = true;
       state.lockedPatchX = pos.x;
       state.lockedPatchY = pos.y;
-
-      // Patch selection/validation is done on the deformed image.
-      // When the user clicks a new patch, automatically leave Rectified/Difference view
-      // so the green locked patch and its center marker are visible again.
-      state.rectificationEnabled = false;
-      state.differenceEnabled = false;
-      refreshRectificationUI();
-
       updateAutocorrPreviewPositionFromCanvasPoint(state.lockedPatchX, state.lockedPatchY);
       renderAutocorrelationAt(state.lockedPatchX, state.lockedPatchY);
-      redrawMainCanvas();
     });
 
     canvas.addEventListener("mouseleave", () => {

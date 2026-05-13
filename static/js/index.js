@@ -1946,12 +1946,21 @@
       return [sx / Math.max(1, n), sy / Math.max(1, n)];
     }
 
-    function anchorHomographyAtPoint(H, anchor) {
-      // The Jacobian-only optimization does not reliably determine translation.
-      // Anchor the rectifying homography so that the average validated center
-      // stays visually in place after rectification.
-      const q = applyHomographyPoint(H, anchor);
-      const T = translationHomography(anchor[0] - q[0], anchor[1] - q[1]);
+    function anchorHomographyAtSourcePoint(H, anchorDef, anchorRef) {
+      // The Jacobian-only optimization estimates the local derivatives of the
+      // rectifying map H: deformed -> reference, but it does not determine the
+      // absolute translation robustly. We therefore impose one photometric
+      // anchor consistent with the known projection used in the demo:
+      //
+      //     H(anchorDef) = anchorRef
+      //
+      // where anchorDef is the average validated center in the deformed image,
+      // and anchorRef is its mapped position in the original texture.
+      const q = applyHomographyPoint(H, anchorDef);
+      const tx = anchorRef[0] - q[0];
+      const ty = anchorRef[1] - q[1];
+      const T = translationHomography(tx, ty);
+
       let Hanchored = mat3Mul(T, H);
       if (Math.abs(Hanchored[2][2]) > 1e-12) {
         const s = Hanchored[2][2];
@@ -1979,8 +1988,13 @@
       // transformed consistently. Keeping pixel coordinates matches the Python
       // rectification-homography fit from local Arect matrices.
       const opt = optimizeLeastSquaresHomographyJS(As, ys, 120, false);
-      const anchor = averageValidatedCenter();
-      const Hanchored = anchorHomographyAtPoint(opt.H_3x3, anchor);
+
+      const anchorDef = averageValidatedCenter();
+      const anchorRefMapped = mapDisplayToSource(anchorDef[0], anchorDef[1]);
+      const anchorRef = anchorRefMapped
+        ? [anchorRefMapped.x, anchorRefMapped.y]
+        : anchorDef;
+      const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
 
       state.rectificationTransform = opt;
       state.globalHomography = Hanchored;

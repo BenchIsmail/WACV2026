@@ -266,7 +266,9 @@
       rectificationTransform: null,
       globalHomography: null,
       globalHomographyInfo: null,
-      lastAffinityEstimate: null
+      lastAffinityEstimate: null,
+      sourceGrayCache: null,
+      sourcePhaseReferenceCache: null
     };
 
     let canvasHovered = false;
@@ -903,6 +905,8 @@
       );
       const img = createImageDataFromGray(gray, w, h);
       state.sourceImageData = img;
+      state.sourceGrayCache = null;
+      state.sourcePhaseReferenceCache = null;
       state.sourceCtx.putImageData(img, 0, 0);
       applyCurrentProjection();
     }
@@ -1416,7 +1420,7 @@
       const n = state.validatedAffinities.length;
       if (patchViewSummary) {
         patchViewSummary.textContent = n
-          ? `${n} validated patch${n > 1 ? "es" : ""}. Each row shows reference, deformed, and locally rectified patch.`
+          ? `${n} validated patch${n > 1 ? "es" : ""}. Each row shows the best matching reference crop found in the whole reference image, the deformed patch, and the locally rectified patch.`
           : "No validated patch yet.";
       }
 
@@ -1446,11 +1450,13 @@
         const score = Number.isFinite(item.phaseScore) ? item.phaseScore.toFixed(4) : "n/a";
         const rcx = item.referenceCenter ? item.referenceCenter.x.toFixed(1) : "?";
         const rcy = item.referenceCenter ? item.referenceCenter.y.toFixed(1) : "?";
-        meta.textContent = `def center=(${cx}, ${cy}) · ref center=(${rcx}, ${rcy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
+        const srcx = item.referenceCenterSeed ? item.referenceCenterSeed.x.toFixed(1) : "?";
+        const srcy = item.referenceCenterSeed ? item.referenceCenterSeed.y.toFixed(1) : "?";
+        meta.textContent = `def center=(${cx}, ${cy}) · matched ref center=(${rcx}, ${rcy}) · seed ref center=(${srcx}, ${srcy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
 
         const triplet = document.createElement("div");
         triplet.className = "patch-triplet";
-        appendPatchThumb(triplet, "reference", item.sourcePatch, patchSize);
+        appendPatchThumb(triplet, "reference (best full-image match)", item.sourcePatch, patchSize);
         appendPatchThumb(triplet, "deformed", item.deformedPatch, patchSize);
         appendPatchThumb(triplet, "rectified", item.rectifiedPatch, patchSize);
 
@@ -1574,6 +1580,142 @@
       return best;
     }
 
+    function getSourceGrayArray() {
+      if (!state.sourceImageData) return null;
+      if (state.sourceGrayCache && state.sourceGrayCache.width === state.sourceImageData.width && state.sourceGrayCache.height === state.sourceImageData.height) {
+        return state.sourceGrayCache.gray;
+      }
+      const w = state.sourceImageData.width;
+      const h = state.sourceImageData.height;
+      const out = new Float64Array(w * h);
+      const data = state.sourceImageData.data;
+      for (let i = 0, k = 0; i < data.length; i += 4, k++) {
+        out[k] = data[i];
+      }
+      state.sourceGrayCache = { width: w, height: h, gray: out };
+      return out;
+    }
+
+    function buildWindowedReferenceFFTCache() {
+      if (!state.sourceImageData) return null;
+      const w = state.sourceImageData.width;
+      const h = state.sourceImageData.height;
+      const N = nextPow2(Math.max(w, h));
+      const cached = state.sourcePhaseReferenceCache;
+      if (cached && cached.width === w && cached.height === h && cached.N === N) return cached;
+
+      const gray = getSourceGrayArray();
+      const size = N * N;
+      const re = new Float64Array(size);
+      const im = new Float64Array(size);
+
+      let mean = 0.0;
+      for (let i = 0; i < gray.length; i++) mean += gray[i];
+      mean /= Math.max(1, gray.length);
+
+      for (let y = 0; y < h; y++) {
+        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
+        for (let x = 0; x < w; x++) {
+          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
+          const idx0 = y * w + x;
+          const idx = y * N + x;
+          re[idx] = (gray[idx0] - mean) * wx * wy;
+        }
+      }
+
+      fft2d(re, im, N, N, false);
+      state.sourcePhaseReferenceCache = { width: w, height: h, N, re, im };
+      return state.sourcePhaseReferenceCache;
+    }
+
+    function phaseCorrelatePatchAgainstWholeReference(patchGray, patchW, patchH) {
+      const refCache = buildWindowedReferenceFFTCache();
+      if (!refCache || !state.sourceImageData) return null;
+
+      const refW = refCache.width;
+      const refH = refCache.height;
+      const N = refCache.N;
+      const size = N * N;
+
+      const br = new Float64Array(size);
+      const bi = new Float64Array(size);
+
+      let meanPatch = 0.0;
+      for (let i = 0; i < patchGray.length; i++) meanPatch += patchGray[i];
+      meanPatch /= Math.max(1, patchGray.length);
+
+      for (let y = 0; y < patchH; y++) {
+        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, patchH - 1));
+        for (let x = 0; x < patchW; x++) {
+          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, patchW - 1));
+          const idx0 = y * patchW + x;
+          const idx = y * N + x;
+          br[idx] = (patchGray[idx0] - meanPatch) * wx * wy;
+        }
+      }
+
+      fft2d(br, bi, N, N, false);
+
+      const cr = new Float64Array(size);
+      const ci = new Float64Array(size);
+      for (let i = 0; i < size; i++) {
+        const re = refCache.re[i] * br[i] + refCache.im[i] * bi[i];
+        const im = refCache.im[i] * br[i] - refCache.re[i] * bi[i];
+        const mag = Math.hypot(re, im);
+        if (mag > 1e-12) {
+          cr[i] = re / mag;
+          ci[i] = im / mag;
+        } else {
+          cr[i] = 0.0;
+          ci[i] = 0.0;
+        }
+      }
+
+      fft2d(cr, ci, N, N, true);
+
+      let best = -Infinity;
+      let bestX = 0;
+      let bestY = 0;
+      for (let y = 0; y < N; y++) {
+        for (let x = 0; x < N; x++) {
+          const idx = y * N + x;
+          const v = Math.hypot(cr[idx], ci[idx]);
+          if (v > best) {
+            best = v;
+            bestX = x;
+            bestY = y;
+          }
+        }
+      }
+
+      let shiftX = bestX;
+      let shiftY = bestY;
+      if (shiftX > N / 2) shiftX -= N;
+      if (shiftY > N / 2) shiftY -= N;
+
+      const centerX = shiftX + patchW / 2;
+      const centerY = shiftY + patchH / 2;
+      const matchedCenter = {
+        x: clamp(centerX, 0, refW - 1),
+        y: clamp(centerY, 0, refH - 1)
+      };
+
+      const matchedReferenceCrop = extractGrayPatchArray(
+        state.sourceImageData,
+        matchedCenter.x,
+        matchedCenter.y,
+        patchW
+      );
+
+      return {
+        score: best,
+        peakXY: [bestX, bestY],
+        shiftXY: [shiftX, shiftY],
+        matchedCenter,
+        matchedReferenceCrop
+      };
+    }
+
     function estimateCurrentAffinityFromDetection() {
       if (!state.displayedImageData || !state.sourceImageData) return null;
       const fresh = getDisplayedDetectionForValidation();
@@ -1591,27 +1733,22 @@
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
 
-      // The active center is expressed in the displayed/deformed image.
-      // For the reference patch used in phase-correlation scoring, map it back
-      // to the original/source texture whenever the current projection provides
-      // this inverse mapping. This matches the Python logic: compare the locally
-      // rectified deformed patch against the corresponding reference content,
-      // not blindly against the same pixel coordinates in the source image.
       const refCenterMapped = mapDisplayToSource(center.x, center.y);
-      const refCenter = refCenterMapped || center;
+      const refCenterSeed = refCenterMapped || center;
 
-      const sourcePatch = extractGrayPatchArray(
-        state.sourceImageData,
-        refCenter.x,
-        refCenter.y,
-        state.patchSize
-      );
       const deformedPatch = extractGrayPatchArray(
         state.displayedImageData,
         center.x,
         center.y,
         state.patchSize
       );
+      const seedReferencePatch = extractGrayPatchArray(
+        state.sourceImageData,
+        refCenterSeed.x,
+        refCenterSeed.y,
+        state.patchSize
+      );
+
       const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
       const candidates = [];
 
@@ -1622,17 +1759,40 @@
         if (!M) continue;
         const Arect = mat2Inv(M);
         if (!Arect) continue;
-        const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
-        const phaseScore = phaseCorrelationScoreArrays(sourcePatch, rectifiedPatch, state.patchSize, state.patchSize);
+
+        const rectifiedPatch = rectifyPatchWithMatrix(
+          state.displayedImageData,
+          center.x,
+          center.y,
+          state.patchSize,
+          M
+        );
+
+        const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(
+          rectifiedPatch,
+          state.patchSize,
+          state.patchSize
+        );
+        if (!wholeRefMatch) continue;
+
         candidates.push({
           pairIndices: [i, j],
           pairName: `${ordered6[i].label}, ${ordered6[j].label}`,
           M,
           Arect,
-          phaseScore,
+          phaseScore: wholeRefMatch.score,
           rectifiedPatch,
           center: { ...center },
-          referenceCenter: { x: refCenter.x, y: refCenter.y },
+          referenceCenter: {
+            x: wholeRefMatch.matchedCenter.x,
+            y: wholeRefMatch.matchedCenter.y
+          },
+          referenceCenterSeed: { x: refCenterSeed.x, y: refCenterSeed.y },
+          referencePeakXY: wholeRefMatch.peakXY,
+          referenceShiftXY: wholeRefMatch.shiftXY,
+          matchedReferenceCrop: wholeRefMatch.matchedReferenceCrop,
+          sourcePatch: wholeRefMatch.matchedReferenceCrop || seedReferencePatch,
+          deformedPatch,
           patchSize: state.patchSize,
           Uobs,
           Vobs,
@@ -1650,8 +1810,7 @@
 
       candidates.sort((a, b) => b.phaseScore - a.phaseScore);
       const best = candidates[0];
-      best.sourcePatch = sourcePatch;
-      best.deformedPatch = deformedPatch;
+      best.seedReferencePatch = seedReferencePatch;
       best.allCandidates = candidates;
       return best;
     }
@@ -2023,7 +2182,7 @@
         return;
       }
       state.validatedAffinities.push(estimate);
-      setValidationMessage(`OK - ${estimate.pairName} selected by phase corr (${estimate.phaseScore.toFixed(4)})`);
+      setValidationMessage(`OK - ${estimate.pairName} selected by phase corr vs whole reference (${estimate.phaseScore.toFixed(4)})`);
       recomputeRectification();
       refreshRectificationUI();
       renderValidatedPatchesPanel();

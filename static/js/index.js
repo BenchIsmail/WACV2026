@@ -1444,7 +1444,9 @@
         const cx = item.center ? item.center.x.toFixed(1) : "?";
         const cy = item.center ? item.center.y.toFixed(1) : "?";
         const score = Number.isFinite(item.phaseScore) ? item.phaseScore.toFixed(4) : "n/a";
-        meta.textContent = `center=(${cx}, ${cy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
+        const rcx = item.referenceCenter ? item.referenceCenter.x.toFixed(1) : "?";
+        const rcy = item.referenceCenter ? item.referenceCenter.y.toFixed(1) : "?";
+        meta.textContent = `def center=(${cx}, ${cy}) · ref center=(${rcx}, ${rcy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
 
         const triplet = document.createElement("div");
         triplet.className = "patch-triplet";
@@ -1588,8 +1590,28 @@
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
-      const sourcePatch = extractGrayPatchArray(state.sourceImageData, center.x, center.y, state.patchSize);
-      const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
+
+      // The active center is expressed in the displayed/deformed image.
+      // For the reference patch used in phase-correlation scoring, map it back
+      // to the original/source texture whenever the current projection provides
+      // this inverse mapping. This matches the Python logic: compare the locally
+      // rectified deformed patch against the corresponding reference content,
+      // not blindly against the same pixel coordinates in the source image.
+      const refCenterMapped = mapDisplayToSource(center.x, center.y);
+      const refCenter = refCenterMapped || center;
+
+      const sourcePatch = extractGrayPatchArray(
+        state.sourceImageData,
+        refCenter.x,
+        refCenter.y,
+        state.patchSize
+      );
+      const deformedPatch = extractGrayPatchArray(
+        state.displayedImageData,
+        center.x,
+        center.y,
+        state.patchSize
+      );
       const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
       const candidates = [];
 
@@ -1610,6 +1632,7 @@
           phaseScore,
           rectifiedPatch,
           center: { ...center },
+          referenceCenter: { x: refCenter.x, y: refCenter.y },
           patchSize: state.patchSize,
           Uobs,
           Vobs,
@@ -1694,21 +1717,33 @@
       return [p[0] / w, p[1] / w];
     }
 
-    function jacobianHomography(H, yi) {
-      const num = [
-        [H[0][0] - yi[0] * H[2][0], H[0][1] - yi[0] * H[2][1]],
-        [H[1][0] - yi[1] * H[2][0], H[1][1] - yi[1] * H[2][1]]
-      ];
-      const Hinv = invert3x3(H);
-      if (!Hinv) throw new Error("Singular homography");
-      let invh = mat3MulVec(Hinv, homogeneous2(yi));
-      const ww = Math.abs(invh[2]) < 1e-12 ? 1e-12 : invh[2];
-      invh = [invh[0] / ww, invh[1] / ww, 1.0];
-      const den = H[2][0] * invh[0] + H[2][1] * invh[1] + H[2][2] * invh[2];
-      if (!Number.isFinite(den) || Math.abs(den) < 1e-12) throw new Error("Invalid jacobian denominator");
+    function jacobianHomographyAtInput(H, x, y) {
+      // Analytical Jacobian of the homography H at its input point (x,y).
+      // This is the same convention as the Python function jacobian_homography(H,x,y):
+      // H maps deformed coordinates toward rectified/reference coordinates, and the
+      // observed local rectifying affinity Arect must satisfy J_H(y_i) ≈ Arect_i.
+      const h11 = H[0][0], h12 = H[0][1], h13 = H[0][2];
+      const h21 = H[1][0], h22 = H[1][1], h23 = H[1][2];
+      const h31 = H[2][0], h32 = H[2][1], h33 = H[2][2];
+
+      const den = h31 * x + h32 * y + h33;
+      if (!Number.isFinite(den) || Math.abs(den) < 1e-12) {
+        throw new Error("Invalid homography denominator");
+      }
+
+      const numU = h11 * x + h12 * y + h13;
+      const numV = h21 * x + h22 * y + h23;
+      const den2 = den * den;
+
       return [
-        [num[0][0] / den, num[0][1] / den],
-        [num[1][0] / den, num[1][1] / den]
+        [
+          (h11 * den - numU * h31) / den2,
+          (h12 * den - numU * h32) / den2
+        ],
+        [
+          (h21 * den - numV * h31) / den2,
+          (h22 * den - numV * h32) / den2
+        ]
       ];
     }
 
@@ -1750,7 +1785,7 @@
         const Aobs = As[idx];
         const yi = ys[idx];
         try {
-          const J = jacobianHomography(H, yi);
+          const J = jacobianHomographyAtInput(H, yi[0], yi[1]);
           out[k++] = Aobs[0][0] - J[0][0];
           out[k++] = Aobs[0][1] - J[0][1];
           out[k++] = Aobs[1][0] - J[1][0];
@@ -1797,7 +1832,7 @@
       return M.map((row) => row[n]);
     }
 
-    function optimizeLeastSquaresHomographyJS(As, ys, maxIter = 80, usePointNormalization = true) {
+    function optimizeLeastSquaresHomographyJS(As, ys, maxIter = 120, usePointNormalization = false) {
       let ysOpt = ys.slice();
       let T = [[1,0,0],[0,1,0],[0,0,1]];
       if (usePointNormalization) {
@@ -1892,13 +1927,46 @@
       return out;
     }
 
+    function translationHomography(tx, ty) {
+      return [
+        [1.0, 0.0, tx],
+        [0.0, 1.0, ty],
+        [0.0, 0.0, 1.0]
+      ];
+    }
+
+    function averageValidatedCenter() {
+      let sx = 0.0;
+      let sy = 0.0;
+      const n = state.validatedAffinities.length;
+      for (const item of state.validatedAffinities) {
+        sx += item.center.x;
+        sy += item.center.y;
+      }
+      return [sx / Math.max(1, n), sy / Math.max(1, n)];
+    }
+
+    function anchorHomographyAtPoint(H, anchor) {
+      // The Jacobian-only optimization does not reliably determine translation.
+      // Anchor the rectifying homography so that the average validated center
+      // stays visually in place after rectification.
+      const q = applyHomographyPoint(H, anchor);
+      const T = translationHomography(anchor[0] - q[0], anchor[1] - q[1]);
+      let Hanchored = mat3Mul(T, H);
+      if (Math.abs(Hanchored[2][2]) > 1e-12) {
+        const s = Hanchored[2][2];
+        Hanchored = Hanchored.map((row) => row.map((v) => v / s));
+      }
+      return Hanchored;
+    }
+
     function recomputeRectification() {
       state.rectificationTransform = null;
       state.globalHomography = null;
       state.globalHomographyInfo = null;
       state.rectificationImageData = null;
       state.differenceImageData = null;
-      if (state.validatedAffinities.length < 2) {
+      if (state.validatedAffinities.length < 3) {
         state.rectificationEnabled = false;
         state.differenceEnabled = false;
         refreshRectificationUI();
@@ -1906,11 +1974,18 @@
       }
       const As = state.validatedAffinities.map((item) => item.Arect);
       const ys = state.validatedAffinities.map((item) => [item.center.x, item.center.y]);
-      const opt = optimizeLeastSquaresHomographyJS(As, ys, 80, true);
+
+      // Do not normalize points here unless the local Jacobian targets are also
+      // transformed consistently. Keeping pixel coordinates matches the Python
+      // rectification-homography fit from local Arect matrices.
+      const opt = optimizeLeastSquaresHomographyJS(As, ys, 120, false);
+      const anchor = averageValidatedCenter();
+      const Hanchored = anchorHomographyAtPoint(opt.H_3x3, anchor);
+
       state.rectificationTransform = opt;
-      state.globalHomography = opt.H_3x3;
+      state.globalHomography = Hanchored;
       state.globalHomographyInfo = opt.info;
-      state.rectificationImageData = renderRectifiedWithHomography(opt.H_3x3);
+      state.rectificationImageData = renderRectifiedWithHomography(Hanchored);
       state.differenceImageData = (state.rectificationImageData && state.sourceImageData)
         ? makeDifferenceImage(state.sourceImageData, state.rectificationImageData)
         : null;
@@ -2696,7 +2771,7 @@
       btnToggleRectification.addEventListener("click", () => {
         if (!state.rectificationImageData) recomputeRectification();
         if (!state.rectificationImageData) {
-          setValidationMessage("Need at least 2 validated affinities");
+          setValidationMessage("Need at least 3 validated affinities");
           refreshRectificationUI();
           redrawMainCanvas();
           return;

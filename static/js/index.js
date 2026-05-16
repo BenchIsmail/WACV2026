@@ -66,6 +66,7 @@
     const btnToggleRectification = document.getElementById("btn-toggle-rectification");
     const btnTogglePatchView = document.getElementById("btn-toggle-patch-view");
     const btnShowTriangulation = document.getElementById("btn-show-triangulation");
+    const btnSavePeaksDetails = document.getElementById("btn-save-peaks-details");
     const btnClearAffinities = document.getElementById("btn-clear-affinities");
 
     let btnDetectPeaks = document.getElementById("btn-detect-peaks");
@@ -3286,6 +3287,188 @@
       redrawMainCanvas();
     }
 
+
+    // =========================================================
+    // SAVE VALIDATED PEAK DETAILS
+    // =========================================================
+    function roundNumberForExport(v, digits = 6) {
+      if (!Number.isFinite(v)) return null;
+      const f = Math.pow(10, digits);
+      return Math.round(v * f) / f;
+    }
+
+    function exportVec2(v, digits = 6) {
+      if (!v || v.length < 2) return null;
+      return [roundNumberForExport(Number(v[0]), digits), roundNumberForExport(Number(v[1]), digits)];
+    }
+
+    function exportPoint(p, digits = 6) {
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+      return {
+        x: roundNumberForExport(p.x, digits),
+        y: roundNumberForExport(p.y, digits)
+      };
+    }
+
+    function exportMat2(M, digits = 6) {
+      if (!M || !M[0] || !M[1]) return null;
+      return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
+    }
+
+    function makePeakPositionExport(item) {
+      const detection = item && item.detection ? item.detection : null;
+      const patchSize = Number(item && item.patchSize ? item.patchSize : state.patchSize);
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const scale = patchSize / computeSize;
+      const cxCompute = (computeSize - 1) / 2.0;
+      const cyCompute = (computeSize - 1) / 2.0;
+      const cxPatch = (patchSize - 1) / 2.0;
+      const cyPatch = (patchSize - 1) / 2.0;
+
+      if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
+        return {
+          compute_size: computeSize,
+          patch_size: patchSize,
+          scale_patch_over_compute: roundNumberForExport(scale),
+          peaks: []
+        };
+      }
+
+      const shiftDefs = [
+        { label: "+U", rc: detection.u_fin },
+        { label: "-U", rc: [-detection.u_fin[0], -detection.u_fin[1]] },
+        { label: "+V", rc: detection.v_fin },
+        { label: "-V", rc: [-detection.v_fin[0], -detection.v_fin[1]] },
+        { label: "+W = +(U-V)", rc: detection.w_fin },
+        { label: "-W = -(U-V)", rc: [-detection.w_fin[0], -detection.w_fin[1]] }
+      ];
+
+      const peaks = shiftDefs.map((p) => {
+        const rowShift = Number(p.rc[0]);
+        const colShift = Number(p.rc[1]);
+        const dxCompute = colShift;
+        const dyCompute = rowShift;
+        const dxPatch = dxCompute * scale;
+        const dyPatch = dyCompute * scale;
+        return {
+          label: p.label,
+          shift_rc_compute_px: [roundNumberForExport(rowShift), roundNumberForExport(colShift)],
+          shift_xy_compute_px: [roundNumberForExport(dxCompute), roundNumberForExport(dyCompute)],
+          position_xy_in_autocorr_compute_px: {
+            x: roundNumberForExport(cxCompute + dxCompute),
+            y: roundNumberForExport(cyCompute + dyCompute)
+          },
+          shift_xy_patch_px: [roundNumberForExport(dxPatch), roundNumberForExport(dyPatch)],
+          position_xy_in_patch_scale_px: {
+            x: roundNumberForExport(cxPatch + dxPatch),
+            y: roundNumberForExport(cyPatch + dyPatch)
+          }
+        };
+      });
+
+      return {
+        compute_size: computeSize,
+        patch_size: patchSize,
+        scale_patch_over_compute: roundNumberForExport(scale),
+        center_autocorr_compute_px: {
+          x: roundNumberForExport(cxCompute),
+          y: roundNumberForExport(cyCompute)
+        },
+        center_patch_scale_px: {
+          x: roundNumberForExport(cxPatch),
+          y: roundNumberForExport(cyPatch)
+        },
+        peaks
+      };
+    }
+
+    function makeValidatedPeaksExportPayload() {
+      const refs = getTextureShiftVectorsSourcePx();
+      const U = refs.U;
+      const V = refs.V;
+      const W = [U[0] - V[0], U[1] - V[1]];
+
+      return {
+        export_version: 1,
+        created_at: new Date().toISOString(),
+        image_size_px: {
+          width: state.size,
+          height: state.size
+        },
+        projection_mode: state.projectionModes[state.projectionIndex],
+        texture_parameters: {
+          black_occupancy: state.texture.occupancy,
+          dilation_radius: state.texture.dilationSize,
+          shift_angle_deg: state.texture.angleShiftDeg,
+          shift_norm_px: state.texture.normShift,
+          gaussian_blur_sigma: state.texture.blurSigma
+        },
+        original_shifts_source_px: {
+          convention: "xy, in the undeformed/source texture",
+          U: exportVec2(U),
+          V: exportVec2(V),
+          W_U_minus_V: exportVec2(W),
+          minus_U: exportVec2([-U[0], -U[1]]),
+          minus_V: exportVec2([-V[0], -V[1]]),
+          minus_W: exportVec2([-W[0], -W[1]])
+        },
+        validated_count: state.validatedAffinities.length,
+        validated_patches: state.validatedAffinities.map((item, idx) => ({
+          id: idx + 1,
+          deformed_patch_center_xy: exportPoint(item.center),
+          matched_reference_center_xy: exportPoint(item.referenceCenter),
+          seed_reference_center_xy: exportPoint(item.referenceCenterSeed),
+          patch_size_px: item.patchSize || state.patchSize,
+          selected_pair: item.pairName || null,
+          selected_pair_indices_in_ordered_hexagon: item.pairIndices || null,
+          phase_correlation_score: roundNumberForExport(item.phaseScore),
+          found_shifts_selected_xy_patch_px: {
+            Uobs: exportVec2(item.Uobs),
+            Vobs: exportVec2(item.Vobs)
+          },
+          original_shifts_used_for_affinity_xy_source_px: {
+            Uref: exportVec2(item.Uref),
+            Vref: exportVec2(item.Vref)
+          },
+          local_forward_affinity_M_source_to_deformed: exportMat2(item.M),
+          local_rectification_A_inverse_deformed_to_source: exportMat2(item.Arect),
+          reference_phase_peak_xy: exportVec2(item.referencePeakXY),
+          reference_shift_xy: exportVec2(item.referenceShiftXY),
+          detected_hexagon: makePeakPositionExport(item),
+          detection_quality: item.detection ? {
+            energy: roundNumberForExport(item.detection.energy ?? item.detection.E ?? item.detection.e_fin),
+            score: roundNumberForExport(item.detection.score),
+            ok: item.detection.ok === undefined ? null : Boolean(item.detection.ok)
+          } : null
+        }))
+      };
+    }
+
+    function downloadTextFile(filename, text, mimeType = "application/json") {
+      const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 250);
+    }
+
+    function saveValidatedPeaksDetails() {
+      if (!state.validatedAffinities || !state.validatedAffinities.length) {
+        setValidationMessage("No validated peak to save. Validate at least one affinity first.");
+        return;
+      }
+      const payload = makeValidatedPeaksExportPayload();
+      const mode = payload.projection_mode || "projection";
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const filename = `validated_peaks_${mode}_${payload.validated_count}_patches_${stamp}.json`;
+      downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
+      setValidationMessage(`Saved ${payload.validated_count} validated peak detail${payload.validated_count > 1 ? "s" : ""} to JSON`);
+    }
+
     // =========================================================
     // PARAMETER ACTIONS
     // =========================================================
@@ -3431,6 +3614,10 @@
         state.triangulationEnabled = !state.triangulationEnabled;
         refreshTriangulation();
       });
+    }
+
+    if (btnSavePeaksDetails) {
+      btnSavePeaksDetails.addEventListener("click", () => saveValidatedPeaksDetails());
     }
 
     if (btnClearAffinities) {

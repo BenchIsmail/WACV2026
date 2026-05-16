@@ -1260,35 +1260,139 @@
       return Math.sqrt(s);
     }
 
-    function weightedLocalModelAtReference(refX, refY) {
-      const anchors = (state.validatedAffinities || []).filter((a) =>
-        a && a.M && isFinitePoint(a.center) && isFinitePoint(a.referenceCenter)
-      );
-      if (!anchors.length) return null;
+    function applyMat2(M, vx, vy) {
+      return {
+        x: M[0][0] * vx + M[0][1] * vy,
+        y: M[1][0] * vx + M[1][1] * vy
+      };
+    }
 
+    function solveBasisCoords(U, V, dx, dy) {
+      const det = U[0] * V[1] - U[1] * V[0];
+      if (Math.abs(det) < 1e-12) return null;
+      return {
+        a: ( dx * V[1] - dy * V[0]) / det,
+        b: (-dx * U[1] + dy * U[0]) / det
+      };
+    }
+
+    function averageMatrices(M1, M2) {
+      if (!M1 && !M2) return null;
+      if (!M1) return [[M2[0][0], M2[0][1]], [M2[1][0], M2[1][1]]];
+      if (!M2) return [[M1[0][0], M1[0][1]], [M1[1][0], M1[1][1]]];
+      return [
+        [(M1[0][0] + M2[0][0]) * 0.5, (M1[0][1] + M2[0][1]) * 0.5],
+        [(M1[1][0] + M2[1][0]) * 0.5, (M1[1][1] + M2[1][1]) * 0.5]
+      ];
+    }
+
+    function computeConsistentAnchorLattice() {
+      const rawAnchors = (state.validatedAffinities || []).filter((a) =>
+        a && a.M && isFinitePoint(a.center)
+      );
+      if (!rawAnchors.length) return null;
+
+      const refs = getTextureShiftVectorsSourcePx();
+      const U = [refs.U[0], refs.U[1]];
+      const V = [refs.V[0], refs.V[1]];
+
+      // We must not use the raw phase-correlation reference centers directly,
+      // because the texture is periodic and different validated patches can snap
+      // to different equivalent cells. We therefore rebuild a consistent lattice
+      // indexing (i, j) from the relative geometry between validated anchors.
+      const assigned = [];
+      const remaining = rawAnchors.map((a, idx) => ({ ...a, _rawIndex: idx }));
+
+      const base = remaining.shift();
+      const baseRef = base.referenceCenter && isFinitePoint(base.referenceCenter)
+        ? { x: base.referenceCenter.x, y: base.referenceCenter.y }
+        : { x: state.size * 0.5, y: state.size * 0.5 };
+
+      assigned.push({
+        ...base,
+        gridI: 0,
+        gridJ: 0,
+        referenceCenterConsistent: { x: baseRef.x, y: baseRef.y }
+      });
+
+      while (remaining.length) {
+        let bestPair = null;
+        for (let r = 0; r < remaining.length; r++) {
+          const cand = remaining[r];
+          for (let a = 0; a < assigned.length; a++) {
+            const anchor = assigned[a];
+            const ddx = cand.center.x - anchor.center.x;
+            const ddy = cand.center.y - anchor.center.y;
+            const dist = Math.hypot(ddx, ddy);
+            if (!bestPair || dist < bestPair.dist) {
+              bestPair = { candIndex: r, anchorIndex: a, dist };
+            }
+          }
+        }
+        if (!bestPair) break;
+
+        const cand = remaining.splice(bestPair.candIndex, 1)[0];
+        const anchor = assigned[bestPair.anchorIndex];
+        const ddx = cand.center.x - anchor.center.x;
+        const ddy = cand.center.y - anchor.center.y;
+
+        const Mavg = averageMatrices(anchor.M, cand.M) || anchor.M || cand.M;
+        const Minv = mat2Inv(Mavg) || mat2Inv(anchor.M) || mat2Inv(cand.M);
+        if (!Minv) continue;
+
+        const dRefApprox = applyMat2(Minv, ddx, ddy);
+        const coeff = solveBasisCoords(U, V, dRefApprox.x, dRefApprox.y);
+        if (!coeff) continue;
+
+        const di = Math.round(coeff.a);
+        const dj = Math.round(coeff.b);
+        const gi = anchor.gridI + di;
+        const gj = anchor.gridJ + dj;
+
+        assigned.push({
+          ...cand,
+          gridI: gi,
+          gridJ: gj,
+          referenceCenterConsistent: {
+            x: baseRef.x + gi * U[0] + gj * V[0],
+            y: baseRef.y + gi * U[1] + gj * V[1]
+          }
+        });
+      }
+
+      return { anchors: assigned, U, V, baseRef };
+    }
+
+    function weightedLocalModelAtLattice(gridI, gridJ, latticeInfo) {
+      if (!latticeInfo || !latticeInfo.anchors || !latticeInfo.anchors.length) return null;
+      const anchors = latticeInfo.anchors;
+      const U = latticeInfo.U;
+      const V = latticeInfo.V;
+      const baseRef = latticeInfo.baseRef;
       const power = Number(state.triangulationOptions.idwPower || 2.0);
+
       let sw = 0;
       let patchSize = 0;
-      const M = [[0, 0], [0, 0]];
       let mappedX = 0;
       let mappedY = 0;
+      const M = [[0, 0], [0, 0]];
 
       for (const a of anchors) {
-        const dx = refX - a.referenceCenter.x;
-        const dy = refY - a.referenceCenter.y;
-        const d = Math.hypot(dx, dy);
+        const di = gridI - a.gridI;
+        const dj = gridJ - a.gridJ;
+        const d = Math.hypot(di, dj);
         const w = d < 1e-6 ? 1e9 : 1.0 / Math.pow(d, power);
+        const deltaRefX = di * U[0] + dj * V[0];
+        const deltaRefY = di * U[1] + dj * V[1];
+        const pred = applyMat2(a.M, deltaRefX, deltaRefY);
+
         sw += w;
         patchSize += w * Number(a.patchSize || state.patchSize);
-
+        mappedX += w * (a.center.x + pred.x);
+        mappedY += w * (a.center.y + pred.y);
         for (let r = 0; r < 2; r++) {
           for (let c = 0; c < 2; c++) M[r][c] += w * a.M[r][c];
         }
-
-        // Local affine prediction from this validated reference center:
-        // deformed = center_def + M * (reference - center_ref)
-        mappedX += w * (a.center.x + a.M[0][0] * dx + a.M[0][1] * dy);
-        mappedY += w * (a.center.y + a.M[1][0] * dx + a.M[1][1] * dy);
       }
 
       if (sw <= 0) return null;
@@ -1297,12 +1401,13 @@
       mappedX /= sw;
       mappedY /= sw;
 
-      // Keep even patch sizes because the rest of the preview code assumes clean centers.
       let ps = Math.round(clamp(patchSize, 32, 140));
       if (ps % 2 !== 0) ps += 1;
       ps = clamp(ps, 32, 140);
 
       return {
+        refX: baseRef.x + gridI * U[0] + gridJ * V[0],
+        refY: baseRef.y + gridI * U[1] + gridJ * V[1],
         x: mappedX,
         y: mappedY,
         M,
@@ -1357,30 +1462,16 @@
     }
 
     function buildTriangulationFromValidatedAffinities() {
-      const anchors = (state.validatedAffinities || []).filter((a) =>
-        a && a.M && isFinitePoint(a.center) && isFinitePoint(a.referenceCenter)
-      );
-
-      if (anchors.length < 1) {
+      const latticeInfo = computeConsistentAnchorLattice();
+      if (!latticeInfo || !latticeInfo.anchors || latticeInfo.anchors.length < 1) {
         setValidationMessage("Validate at least one patch before triangulation");
         return null;
       }
 
-      const refs = getTextureShiftVectorsSourcePx();
-      const U = [refs.U[0], refs.U[1]];
-      const V = [refs.V[0], refs.V[1]];
-      const stepMax = Math.max(6, Math.max(Math.hypot(U[0], U[1]), Math.hypot(V[0], V[1])));
+      const anchors = latticeInfo.anchors;
+      const U = latticeInfo.U;
+      const V = latticeInfo.V;
       const radius = Math.max(3, Math.floor(state.triangulationOptions.gridRadius || 18));
-
-      // Reference origin: average matched reference center of the validated patches.
-      let ox = 0, oy = 0;
-      for (const a of anchors) {
-        ox += a.referenceCenter.x;
-        oy += a.referenceCenter.y;
-      }
-      ox /= anchors.length;
-      oy /= anchors.length;
-
       const vertices = [];
       const index = new Map();
       const keyOf = (i, j) => `${i},${j}`;
@@ -1388,13 +1479,33 @@
       const detectStride = Math.max(1, Math.floor(state.triangulationOptions.detectStride || 3));
       let checks = 0;
 
-      for (let i = -radius; i <= radius; i++) {
-        for (let j = -radius; j <= radius; j++) {
-          const refX = ox + i * U[0] + j * V[0];
-          const refY = oy + i * U[1] + j * V[1];
-          if (refX < -stepMax || refX > state.size + stepMax || refY < -stepMax || refY > state.size + stepMax) continue;
+      let avgM = [[0, 0], [0, 0]];
+      for (const a of anchors) {
+        avgM[0][0] += a.M[0][0]; avgM[0][1] += a.M[0][1];
+        avgM[1][0] += a.M[1][0]; avgM[1][1] += a.M[1][1];
+      }
+      avgM[0][0] /= anchors.length; avgM[0][1] /= anchors.length;
+      avgM[1][0] /= anchors.length; avgM[1][1] /= anchors.length;
+      const mU = applyMat2(avgM, U[0], U[1]);
+      const mV = applyMat2(avgM, V[0], V[1]);
+      const mW = applyMat2(avgM, U[0] - V[0], U[1] - V[1]);
+      const nominalStep = Math.max(4, Math.min(Math.hypot(mU.x, mU.y), Math.hypot(mV.x, mV.y), Math.hypot(mW.x, mW.y)));
+      const edgeMax = 2.6 * nominalStep;
 
-          const model = weightedLocalModelAtReference(refX, refY);
+      // Center the lattice sweep on the barycenter of validated anchor indices.
+      let i0 = 0, j0 = 0;
+      for (const a of anchors) {
+        i0 += a.gridI;
+        j0 += a.gridJ;
+      }
+      i0 = Math.round(i0 / anchors.length);
+      j0 = Math.round(j0 / anchors.length);
+
+      for (let di = -radius; di <= radius; di++) {
+        for (let dj = -radius; dj <= radius; dj++) {
+          const gi = i0 + di;
+          const gj = j0 + dj;
+          const model = weightedLocalModelAtLattice(gi, gj, latticeInfo);
           if (!model) continue;
 
           let x = model.x;
@@ -1402,11 +1513,7 @@
           let localPair = null;
           let checked = false;
 
-          // Optional: in non-validated zones, reuse the interpolated/nearest patch size
-          // and re-detect the hexagon. The selected local pair is the one closest to the
-          // interpolated validated matrix, avoiding a slow global phase-correlation search
-          // at every point.
-          if (checks < maxChecks && (((i + radius) % detectStride === 0) && ((j + radius) % detectStride === 0))) {
+          if (checks < maxChecks && (((di + radius) % detectStride === 0) && ((dj + radius) % detectStride === 0))) {
             const local = estimateAffinityAtPointUsingPredictedModel(x, y, model.patchSize, model.M);
             checked = true;
             checks += 1;
@@ -1417,11 +1524,15 @@
 
           if (x < -30 || x > state.size + 30 || y < -30 || y > state.size + 30) continue;
           const id = vertices.length;
-          index.set(keyOf(i, j), id);
+          index.set(keyOf(gi, gj), id);
           vertices.push({
-            id, i, j,
-            refX, refY,
-            x, y,
+            id,
+            i: gi,
+            j: gj,
+            refX: model.refX,
+            refY: model.refY,
+            x,
+            y,
             patchSize: model.patchSize,
             checked,
             localPair
@@ -1429,17 +1540,47 @@
         }
       }
 
+      function edgeLen(a, b) {
+        return Math.hypot(a.x - b.x, a.y - b.y);
+      }
+
+      function triArea2(a, b, c) {
+        return Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+      }
+
       const triangles = [];
       const maxTriangles = Math.max(50, Math.floor(state.triangulationOptions.maxTriangles || 2400));
-      for (let i = -radius; i < radius; i++) {
-        for (let j = -radius; j < radius; j++) {
-          const a = index.get(keyOf(i, j));
-          const b = index.get(keyOf(i + 1, j));
-          const c = index.get(keyOf(i, j + 1));
-          const d = index.get(keyOf(i + 1, j + 1));
+      for (let di = -radius; di < radius; di++) {
+        for (let dj = -radius; dj < radius; dj++) {
+          const gi = i0 + di;
+          const gj = j0 + dj;
+          const aId = index.get(keyOf(gi, gj));
+          const bId = index.get(keyOf(gi + 1, gj));
+          const cId = index.get(keyOf(gi, gj + 1));
+          const dId = index.get(keyOf(gi + 1, gj + 1));
 
-          if (a != null && b != null && c != null) triangles.push([a, b, c]);
-          if (b != null && d != null && c != null) triangles.push([b, d, c]);
+          const tryPush = (pId, qId, rId) => {
+            if (pId == null || qId == null || rId == null) return;
+            const p = vertices[pId], q = vertices[qId], r = vertices[rId];
+            if (!p || !q || !r) return;
+            const l1 = edgeLen(p, q);
+            const l2 = edgeLen(q, r);
+            const l3 = edgeLen(r, p);
+            if (l1 > edgeMax || l2 > edgeMax || l3 > edgeMax) return;
+            if (triArea2(p, q, r) < 1.0) return;
+            triangles.push([pId, qId, rId]);
+          };
+
+          // Two triangles per lattice cell (parallelogram spanned by U and V).
+          // Alternate the diagonal for a cleaner and more stable visual mesh.
+          if (((gi + gj) & 1) === 0) {
+            tryPush(aId, bId, cId);
+            tryPush(bId, dId, cId);
+          } else {
+            tryPush(aId, bId, dId);
+            tryPush(aId, dId, cId);
+          }
+
           if (triangles.length >= maxTriangles) break;
         }
         if (triangles.length >= maxTriangles) break;
@@ -1449,8 +1590,15 @@
         vertices,
         triangles,
         anchors: anchors.length,
-        origin: { x: ox, y: oy },
-        checkedDetections: checks
+        origin: { x: latticeInfo.baseRef.x, y: latticeInfo.baseRef.y },
+        checkedDetections: checks,
+        nominalStep,
+        consistentAnchors: anchors.map((a) => ({
+          x: a.center.x,
+          y: a.center.y,
+          gridI: a.gridI,
+          gridJ: a.gridJ
+        }))
       };
     }
 
@@ -1485,9 +1633,9 @@
 
       ctx.save();
 
-      // Triangle edges
-      ctx.lineWidth = 1.15;
-      ctx.strokeStyle = "rgba(14, 165, 233, 0.62)";
+      // Triangle edges (green as requested)
+      ctx.lineWidth = 1.2;
+      ctx.strokeStyle = "rgba(34, 197, 94, 0.78)";
       for (const tri of triangles) {
         const a = vertices[tri[0]], b = vertices[tri[1]], c = vertices[tri[2]];
         if (!a || !b || !c) continue;
@@ -1499,9 +1647,8 @@
         ctx.stroke();
       }
 
-      // Validated centers are displayed by drawValidatedAffinityMarkers().
-      // Here we only draw a few small dots at vertices whose hexagon was re-detected.
-      ctx.fillStyle = "rgba(250, 204, 21, 0.92)";
+      // Small green dots for sampled vertices where the local hexagon was checked.
+      ctx.fillStyle = "rgba(22, 163, 74, 0.95)";
       for (const v of vertices) {
         if (!v.checked) continue;
         ctx.beginPath();
@@ -1509,7 +1656,6 @@
         ctx.fill();
       }
 
-      // Small summary
       ctx.font = "bold 13px Inter, Arial, sans-serif";
       ctx.textBaseline = "top";
       const label = `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors}`;
@@ -1521,7 +1667,6 @@
       ctx.fillText(label, 12 + pad, 18);
       ctx.restore();
     }
-
 
     function drawValidatedAffinityMarkers() {
       if (!state.validatedAffinities || !state.validatedAffinities.length) return;

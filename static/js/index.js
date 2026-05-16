@@ -1756,7 +1756,43 @@
       return { detection: null, computeSize, center: p };
     }
 
+    function angleXY(v) {
+      return Math.atan2(v[1], v[0]);
+    }
+
+    function sortHexagonByAngle(peaks) {
+      return peaks.slice().sort((a, b) => angleXY(a.vec) - angleXY(b.vec));
+    }
+
+    function buildObservedHexagonPeaksXY(detection, scale) {
+      const U = [detection.u_fin[1] * scale, detection.u_fin[0] * scale];
+      const V = [detection.v_fin[1] * scale, detection.v_fin[0] * scale];
+      const W = [detection.w_fin[1] * scale, detection.w_fin[0] * scale];
+      return [
+        { label: "+Udet", shortLabel: "+U", index: 0, vec: U },
+        { label: "+Vdet", shortLabel: "+V", index: 1, vec: V },
+        { label: "+Wdet", shortLabel: "+W", index: 2, vec: W },
+        { label: "-Udet", shortLabel: "-U", index: 3, vec: [-U[0], -U[1]] },
+        { label: "-Vdet", shortLabel: "-V", index: 4, vec: [-V[0], -V[1]] },
+        { label: "-Wdet", shortLabel: "-W", index: 5, vec: [-W[0], -W[1]] }
+      ];
+    }
+
+    function buildReferenceHexagonPeaksXY(Uref, Vref) {
+      const Wref = [Uref[0] - Vref[0], Uref[1] - Vref[1]];
+      return [
+        { label: "+Uref", shortLabel: "+U", refKey: "+U", vec: Uref },
+        { label: "+Vref", shortLabel: "+V", refKey: "+V", vec: Vref },
+        { label: "+Wref", shortLabel: "+W", refKey: "+W", vec: Wref },
+        { label: "-Uref", shortLabel: "-U", refKey: "-U", vec: [-Uref[0], -Uref[1]] },
+        { label: "-Vref", shortLabel: "-V", refKey: "-V", vec: [-Vref[0], -Vref[1]] },
+        { label: "-Wref", shortLabel: "-W", refKey: "-W", vec: [-Wref[0], -Wref[1]] }
+      ];
+    }
+
     function buildOrdered6CandidatesXY(detection, scale) {
+      // Kept for export/debug compatibility. This is the circular order used by
+      // the older implementation, not the assignment rule used for validation.
       const U = [detection.u_fin[1] * scale, detection.u_fin[0] * scale];
       const V = [detection.v_fin[1] * scale, detection.v_fin[0] * scale];
       const W = [detection.w_fin[1] * scale, detection.w_fin[0] * scale];
@@ -1768,6 +1804,49 @@
         { label: "-V", vec: [-V[0], -V[1]] },
         { label: "+W", vec: W }
       ];
+    }
+
+    function buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref) {
+      const refSorted = sortHexagonByAngle(buildReferenceHexagonPeaksXY(Uref, Vref));
+      const obsSorted = sortHexagonByAngle(observedPeaks);
+      const candidates = [];
+
+      // Your colleague's assignment observation: if there is no reflection and no
+      // aliasing, the observed deformed hexagon keeps the same circular order and
+      // same rotation sense as the original hexagon, up to a cyclic shift. Hence
+      // there are only six cyclic assignments to test.
+      for (let shift = 0; shift < 6; shift++) {
+        const map = new Map();
+        const assignment = [];
+        for (let k = 0; k < 6; k++) {
+          const refPeak = refSorted[k];
+          const obsPeak = obsSorted[(k + shift) % 6];
+          map.set(refPeak.refKey, obsPeak);
+          assignment.push({
+            ref: refPeak.shortLabel,
+            obs: obsPeak.shortLabel,
+            refAngle: angleXY(refPeak.vec),
+            obsAngle: angleXY(obsPeak.vec)
+          });
+        }
+
+        const obsForU = map.get("+U");
+        const obsForV = map.get("+V");
+        if (!obsForU || !obsForV) continue;
+        const M = solve2x2ForColumns(Uref, Vref, obsForU.vec, obsForV.vec);
+        if (!M) continue;
+
+        candidates.push({
+          orderShift: shift,
+          assignment,
+          Uobs: obsForU.vec,
+          Vobs: obsForV.vec,
+          pairIndices: [obsForU.index, obsForV.index],
+          pairName: `${obsForU.shortLabel}→+U, ${obsForV.shortLabel}→+V`,
+          assignmentMode: "order_preserving_same_rotation_sense"
+        });
+      }
+      return candidates;
     }
 
     function extractGrayPatchArray(imageData, cx, cy, patchSize) {
@@ -2289,7 +2368,7 @@
 
       const computeSize = fresh.computeSize;
       const scale = state.patchSize / computeSize;
-      const ordered6 = buildOrdered6CandidatesXY(detection, scale);
+      const observedPeaks = buildObservedHexagonPeaksXY(detection, scale);
       const refs = getTextureShiftVectorsSourcePx();
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
@@ -2311,12 +2390,12 @@
         state.patchSize
       );
 
-      const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
+      const assignmentCandidates = buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref);
       const candidates = [];
 
-      for (const [i, j] of idxPairs) {
-        const Uobs = ordered6[i].vec;
-        const Vobs = ordered6[j].vec;
+      for (const baseCandidate of assignmentCandidates) {
+        const Uobs = baseCandidate.Uobs;
+        const Vobs = baseCandidate.Vobs;
         const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
         if (!M) continue;
         const Arect = mat2Inv(M);
@@ -2338,8 +2417,11 @@
         if (!wholeRefMatch) continue;
 
         candidates.push({
-          pairIndices: [i, j],
-          pairName: `${ordered6[i].label}, ${ordered6[j].label}`,
+          pairIndices: baseCandidate.pairIndices,
+          pairName: baseCandidate.pairName,
+          orderShift: baseCandidate.orderShift,
+          assignment: baseCandidate.assignment,
+          assignmentMode: baseCandidate.assignmentMode,
           M,
           Arect,
           phaseScore: wholeRefMatch.score,
@@ -2361,6 +2443,7 @@
           Uref,
           Vref,
           detection,
+          observedPeaks,
           projectionMode: state.projectionModes[state.projectionIndex]
         });
       }
@@ -2377,7 +2460,7 @@
       }
       best.seedReferencePatch = seedReferencePatch;
       best.allCandidates = candidates;
-      best.selectionMode = "geometry_expected_jacobian_then_phase_tiebreak";
+      best.selectionMode = "order_preserving_assignment_then_geometry_expected_jacobian_then_phase_tiebreak";
       return best;
     }
 
@@ -2750,7 +2833,8 @@
       state.validatedAffinities.push(estimate);
       const dExp = Number.isFinite(estimate.distanceToExpected) ? estimate.distanceToExpected.toFixed(3) : "?";
       const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
-      setValidationMessage(`OK - ${estimate.pairName} selected by geometry + phase | phase=${estimate.phaseScore.toFixed(4)} | dJ=${dExp} | det=${detMsg}`);
+      const shiftMsg = estimate.orderShift === undefined ? "?" : String(estimate.orderShift);
+      setValidationMessage(`OK - ${estimate.pairName} | order shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | dJ=${dExp} | det=${detMsg}`);
       recomputeRectification();
       if (state.triangulationEnabled) {
         state.triangulationData = buildTriangulationFromValidatedAffinities();
@@ -3542,6 +3626,9 @@
           patch_size_px: item.patchSize || state.patchSize,
           selected_pair: item.pairName || null,
           selected_pair_indices_in_ordered_hexagon: item.pairIndices || null,
+          assignment_mode: item.assignmentMode || null,
+          order_preserving_cyclic_shift: item.orderShift === undefined ? null : item.orderShift,
+          order_preserving_assignment: item.assignment || null,
           phase_correlation_score: roundNumberForExport(item.phaseScore),
           found_shifts_selected_xy_patch_px: {
             Uobs: exportVec2(item.Uobs),

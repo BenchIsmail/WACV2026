@@ -2163,6 +2163,121 @@
       };
     }
 
+    function mat2Det(M) {
+      if (!M) return NaN;
+      return M[0][0] * M[1][1] - M[0][1] * M[1][0];
+    }
+
+    function mat2Frobenius(M) {
+      if (!M) return Infinity;
+      return Math.sqrt(
+        M[0][0] * M[0][0] + M[0][1] * M[0][1] +
+        M[1][0] * M[1][0] + M[1][1] * M[1][1]
+      );
+    }
+
+    function mat2RelativeDistance(M, R) {
+      if (!M || !R) return Infinity;
+      const d00 = M[0][0] - R[0][0];
+      const d01 = M[0][1] - R[0][1];
+      const d10 = M[1][0] - R[1][0];
+      const d11 = M[1][1] - R[1][1];
+      const num = Math.sqrt(d00*d00 + d01*d01 + d10*d10 + d11*d11);
+      return num / (mat2Frobenius(R) + 1e-9);
+    }
+
+    function mat2ConditionNumberApprox(M) {
+      if (!M) return Infinity;
+      const a = M[0][0], b = M[0][1], c = M[1][0], d = M[1][1];
+      const s1 = a*a + b*b + c*c + d*d;
+      const det = a*d - b*c;
+      const disc = Math.max(0, s1*s1 - 4*det*det);
+      const lMax = 0.5 * (s1 + Math.sqrt(disc));
+      const lMin = 0.5 * (s1 - Math.sqrt(disc));
+      if (lMin <= 1e-12) return Infinity;
+      return Math.sqrt(lMax / lMin);
+    }
+
+    function mat2Mean(mats) {
+      const valid = (mats || []).filter(Boolean);
+      if (!valid.length) return null;
+      const M = [[0,0],[0,0]];
+      for (const A of valid) {
+        M[0][0] += A[0][0]; M[0][1] += A[0][1];
+        M[1][0] += A[1][0]; M[1][1] += A[1][1];
+      }
+      M[0][0] /= valid.length; M[0][1] /= valid.length;
+      M[1][0] /= valid.length; M[1][1] /= valid.length;
+      return M;
+    }
+
+    function getValidatedMeanAffinity() {
+      return mat2Mean((state.validatedAffinities || [])
+        .filter((a) => a && a.M && Number.isFinite(mat2Det(a.M)) && mat2Det(a.M) > 0)
+        .map((a) => a.M));
+    }
+
+    function getExpectedLocalForwardAffinity(center) {
+      // In the interactive demo the deformation is synthetically generated, so
+      // we can compute the expected local Jacobian source -> displayed image.
+      // This is the strongest way to disambiguate the six autocorrelation peaks.
+      if (center && typeof sourceToDisplayJacobianAt === "function") {
+        const J = sourceToDisplayJacobianAt(center.x, center.y);
+        if (J && Number.isFinite(mat2Det(J)) && Math.abs(mat2Det(J)) > 1e-9) return J;
+      }
+      const mean = getValidatedMeanAffinity();
+      if (mean) return mean;
+      return [[1, 0], [0, 1]];
+    }
+
+    function geometryPenaltyForCandidate(M, MExpected, MMean) {
+      if (!M) return 1e9;
+      const det = mat2Det(M);
+      if (!Number.isFinite(det)) return 1e9;
+
+      let penalty = 0;
+      // Reject flips: the orientation of the lattice should not change.
+      if (det <= 0) penalty += 1e6 + 1e5 * Math.abs(det);
+
+      const cond = mat2ConditionNumberApprox(M);
+      if (!Number.isFinite(cond)) penalty += 1e6;
+      else if (cond > 8.0) penalty += (cond - 8.0) * 20.0;
+
+      const colU = Math.hypot(M[0][1], M[1][1]); // M * (0, 1), proportional to Uref
+      const colV = Math.hypot(M[0][0], M[1][0]); // M * (1, 0), proportional to Vref
+      if (colU < 0.20 || colU > 4.50) penalty += 1e5;
+      if (colV < 0.20 || colV > 4.50) penalty += 1e5;
+
+      if (MExpected) penalty += 12.0 * mat2RelativeDistance(M, MExpected);
+      if (MMean) penalty += 4.0 * mat2RelativeDistance(M, MMean);
+      return penalty;
+    }
+
+    function chooseBestAffinityCandidate(candidates, center) {
+      if (!candidates || !candidates.length) return null;
+      const MExpected = getExpectedLocalForwardAffinity(center);
+      const MMean = getValidatedMeanAffinity();
+      const maxPhase = Math.max(...candidates.map((c) => Number(c.phaseScore) || 0), 1e-9);
+
+      for (const c of candidates) {
+        const phaseNorm = (Number(c.phaseScore) || 0) / maxPhase;
+        const penalty = geometryPenaltyForCandidate(c.M, MExpected, MMean);
+        // Geometry is intentionally dominant. Phase correlation is only a tie-breaker,
+        // because the autocorrelation texture is periodic and phase scores are often ambiguous.
+        c.geometryPenalty = penalty;
+        c.distanceToExpected = MExpected ? mat2RelativeDistance(c.M, MExpected) : null;
+        c.distanceToValidatedMean = MMean ? mat2RelativeDistance(c.M, MMean) : null;
+        c.conditionNumber = mat2ConditionNumberApprox(c.M);
+        c.det = mat2Det(c.M);
+        c.phaseScoreNormalized = phaseNorm;
+        c.selectionScore = -penalty + 0.25 * phaseNorm;
+        c.selectionReferenceM = MExpected;
+      }
+
+      candidates.sort((a, b) => b.selectionScore - a.selectionScore);
+      return candidates[0];
+    }
+
     function estimateCurrentAffinityFromDetection() {
       if (!state.displayedImageData || !state.sourceImageData) return null;
       const fresh = getDisplayedDetectionForValidation();
@@ -2255,10 +2370,14 @@
         return null;
       }
 
-      candidates.sort((a, b) => b.phaseScore - a.phaseScore);
-      const best = candidates[0];
+      const best = chooseBestAffinityCandidate(candidates, center);
+      if (!best) {
+        setValidationMessage("No valid affinity candidate after geometric filtering");
+        return null;
+      }
       best.seedReferencePatch = seedReferencePatch;
       best.allCandidates = candidates;
+      best.selectionMode = "geometry_expected_jacobian_then_phase_tiebreak";
       return best;
     }
 
@@ -2629,7 +2748,9 @@
         return;
       }
       state.validatedAffinities.push(estimate);
-      setValidationMessage(`OK - ${estimate.pairName} selected by phase corr vs whole reference (${estimate.phaseScore.toFixed(4)})`);
+      const dExp = Number.isFinite(estimate.distanceToExpected) ? estimate.distanceToExpected.toFixed(3) : "?";
+      const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
+      setValidationMessage(`OK - ${estimate.pairName} selected by geometry + phase | phase=${estimate.phaseScore.toFixed(4)} | dJ=${dExp} | det=${detMsg}`);
       recomputeRectification();
       if (state.triangulationEnabled) {
         state.triangulationData = buildTriangulationFromValidatedAffinities();

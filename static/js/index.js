@@ -65,6 +65,7 @@
     const btnValidateAffinity = document.getElementById("btn-validate-affinity");
     const btnToggleRectification = document.getElementById("btn-toggle-rectification");
     const btnTogglePatchView = document.getElementById("btn-toggle-patch-view");
+    const btnShowTriangulation = document.getElementById("btn-show-triangulation");
     const btnClearAffinities = document.getElementById("btn-clear-affinities");
 
     let btnDetectPeaks = document.getElementById("btn-detect-peaks");
@@ -268,7 +269,23 @@
       globalHomographyInfo: null,
       lastAffinityEstimate: null,
       sourceGrayCache: null,
-      sourcePhaseReferenceCache: null
+      sourcePhaseReferenceCache: null,
+
+      // Triangular mesh visualization.
+      // It is built from manually validated anchors. Each anchor gives:
+      //   - a local patch size that worked in that region,
+      //   - a local matrix M such that deformed_offset ≈ M * reference_offset,
+      //   - a matched reference center from phase correlation.
+      triangulationEnabled: false,
+      triangulationData: null,
+      triangulationOptions: {
+        gridRadius: 18,          // number of U/V steps around the average reference center
+        maxTriangles: 2400,      // safety limit for browser performance
+        idwPower: 2.0,           // inverse-distance weighting for local interpolation
+        detectStride: 3,         // optional local peak re-detection every N grid vertices
+        maxDetectionChecks: 120, // safety limit for extra peak checks
+        minConfidence: 0.15
+      }
     };
 
     let canvasHovered = false;
@@ -1223,6 +1240,289 @@
     }
 
 
+
+    // =========================================================
+    // TRIANGULAR MESH FROM VALIDATED AUTOCORRELATION ANCHORS
+    // =========================================================
+    function isFinitePoint(p) {
+      return p && Number.isFinite(p.x) && Number.isFinite(p.y);
+    }
+
+    function matrixDistance2(A, B) {
+      if (!A || !B) return Infinity;
+      let s = 0;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const d = A[r][c] - B[r][c];
+          s += d * d;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function weightedLocalModelAtReference(refX, refY) {
+      const anchors = (state.validatedAffinities || []).filter((a) =>
+        a && a.M && isFinitePoint(a.center) && isFinitePoint(a.referenceCenter)
+      );
+      if (!anchors.length) return null;
+
+      const power = Number(state.triangulationOptions.idwPower || 2.0);
+      let sw = 0;
+      let patchSize = 0;
+      const M = [[0, 0], [0, 0]];
+      let mappedX = 0;
+      let mappedY = 0;
+
+      for (const a of anchors) {
+        const dx = refX - a.referenceCenter.x;
+        const dy = refY - a.referenceCenter.y;
+        const d = Math.hypot(dx, dy);
+        const w = d < 1e-6 ? 1e9 : 1.0 / Math.pow(d, power);
+        sw += w;
+        patchSize += w * Number(a.patchSize || state.patchSize);
+
+        for (let r = 0; r < 2; r++) {
+          for (let c = 0; c < 2; c++) M[r][c] += w * a.M[r][c];
+        }
+
+        // Local affine prediction from this validated reference center:
+        // deformed = center_def + M * (reference - center_ref)
+        mappedX += w * (a.center.x + a.M[0][0] * dx + a.M[0][1] * dy);
+        mappedY += w * (a.center.y + a.M[1][0] * dx + a.M[1][1] * dy);
+      }
+
+      if (sw <= 0) return null;
+      patchSize = patchSize / sw;
+      M[0][0] /= sw; M[0][1] /= sw; M[1][0] /= sw; M[1][1] /= sw;
+      mappedX /= sw;
+      mappedY /= sw;
+
+      // Keep even patch sizes because the rest of the preview code assumes clean centers.
+      let ps = Math.round(clamp(patchSize, 32, 140));
+      if (ps % 2 !== 0) ps += 1;
+      ps = clamp(ps, 32, 140);
+
+      return {
+        x: mappedX,
+        y: mappedY,
+        M,
+        patchSize: ps,
+        weightSum: sw
+      };
+    }
+
+    function computeHexagonDetectionAtPoint(cx, cy, patchSize) {
+      if (!state.displayedImageData) return null;
+      const ps = Math.round(clamp(patchSize || state.patchSize, 32, 140));
+      const computeSize = Math.min(state.previewComputeSize, ps);
+      const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, ps, computeSize);
+      const ac = computeAutocorrelation2D(patch, computeSize);
+      const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
+      return findHexagonJS(
+        ac,
+        computeSize,
+        state.peakDetection,
+        theoreticalInfo.U_ref_rc,
+        theoreticalInfo.V_ref_rc
+      );
+    }
+
+    function estimateAffinityAtPointUsingPredictedModel(cx, cy, patchSize, predictedM) {
+      const detection = computeHexagonDetectionAtPoint(cx, cy, patchSize);
+      if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) return null;
+
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const scale = patchSize / computeSize;
+      const ordered6 = buildOrdered6CandidatesXY(detection, scale);
+      const refs = getTextureShiftVectorsSourcePx();
+      const Uref = [refs.U[0], refs.U[1]];
+      const Vref = [refs.V[0], refs.V[1]];
+      const idxPairs = [[0,1],[1,2],[2,3],[3,4],[4,5],[5,0]];
+
+      let best = null;
+      for (const [i, j] of idxPairs) {
+        const M = solve2x2ForColumns(Uref, Vref, ordered6[i].vec, ordered6[j].vec);
+        if (!M) continue;
+        const score = -matrixDistance2(M, predictedM);
+        if (!best || score > best.score) {
+          best = {
+            M,
+            score,
+            pairName: `${ordered6[i].label}, ${ordered6[j].label}`,
+            detection
+          };
+        }
+      }
+      return best;
+    }
+
+    function buildTriangulationFromValidatedAffinities() {
+      const anchors = (state.validatedAffinities || []).filter((a) =>
+        a && a.M && isFinitePoint(a.center) && isFinitePoint(a.referenceCenter)
+      );
+
+      if (anchors.length < 1) {
+        setValidationMessage("Validate at least one patch before triangulation");
+        return null;
+      }
+
+      const refs = getTextureShiftVectorsSourcePx();
+      const U = [refs.U[0], refs.U[1]];
+      const V = [refs.V[0], refs.V[1]];
+      const stepMax = Math.max(6, Math.max(Math.hypot(U[0], U[1]), Math.hypot(V[0], V[1])));
+      const radius = Math.max(3, Math.floor(state.triangulationOptions.gridRadius || 18));
+
+      // Reference origin: average matched reference center of the validated patches.
+      let ox = 0, oy = 0;
+      for (const a of anchors) {
+        ox += a.referenceCenter.x;
+        oy += a.referenceCenter.y;
+      }
+      ox /= anchors.length;
+      oy /= anchors.length;
+
+      const vertices = [];
+      const index = new Map();
+      const keyOf = (i, j) => `${i},${j}`;
+      const maxChecks = Math.max(0, Math.floor(state.triangulationOptions.maxDetectionChecks || 0));
+      const detectStride = Math.max(1, Math.floor(state.triangulationOptions.detectStride || 3));
+      let checks = 0;
+
+      for (let i = -radius; i <= radius; i++) {
+        for (let j = -radius; j <= radius; j++) {
+          const refX = ox + i * U[0] + j * V[0];
+          const refY = oy + i * U[1] + j * V[1];
+          if (refX < -stepMax || refX > state.size + stepMax || refY < -stepMax || refY > state.size + stepMax) continue;
+
+          const model = weightedLocalModelAtReference(refX, refY);
+          if (!model) continue;
+
+          let x = model.x;
+          let y = model.y;
+          let localPair = null;
+          let checked = false;
+
+          // Optional: in non-validated zones, reuse the interpolated/nearest patch size
+          // and re-detect the hexagon. The selected local pair is the one closest to the
+          // interpolated validated matrix, avoiding a slow global phase-correlation search
+          // at every point.
+          if (checks < maxChecks && (((i + radius) % detectStride === 0) && ((j + radius) % detectStride === 0))) {
+            const local = estimateAffinityAtPointUsingPredictedModel(x, y, model.patchSize, model.M);
+            checked = true;
+            checks += 1;
+            if (local && Number.isFinite(local.score)) {
+              localPair = local.pairName;
+            }
+          }
+
+          if (x < -30 || x > state.size + 30 || y < -30 || y > state.size + 30) continue;
+          const id = vertices.length;
+          index.set(keyOf(i, j), id);
+          vertices.push({
+            id, i, j,
+            refX, refY,
+            x, y,
+            patchSize: model.patchSize,
+            checked,
+            localPair
+          });
+        }
+      }
+
+      const triangles = [];
+      const maxTriangles = Math.max(50, Math.floor(state.triangulationOptions.maxTriangles || 2400));
+      for (let i = -radius; i < radius; i++) {
+        for (let j = -radius; j < radius; j++) {
+          const a = index.get(keyOf(i, j));
+          const b = index.get(keyOf(i + 1, j));
+          const c = index.get(keyOf(i, j + 1));
+          const d = index.get(keyOf(i + 1, j + 1));
+
+          if (a != null && b != null && c != null) triangles.push([a, b, c]);
+          if (b != null && d != null && c != null) triangles.push([b, d, c]);
+          if (triangles.length >= maxTriangles) break;
+        }
+        if (triangles.length >= maxTriangles) break;
+      }
+
+      return {
+        vertices,
+        triangles,
+        anchors: anchors.length,
+        origin: { x: ox, y: oy },
+        checkedDetections: checks
+      };
+    }
+
+    function refreshTriangulation() {
+      if (!state.triangulationEnabled) {
+        state.triangulationData = null;
+        redrawMainCanvas();
+        return;
+      }
+
+      const mesh = buildTriangulationFromValidatedAffinities();
+      if (!mesh || !mesh.vertices.length || !mesh.triangles.length) {
+        state.triangulationEnabled = false;
+        state.triangulationData = null;
+        setValidationMessage("Triangulation failed: not enough valid local anchors");
+      } else {
+        state.triangulationData = mesh;
+        setValidationMessage(`Triangulation: ${mesh.triangles.length} triangles from ${mesh.anchors} validated anchors`);
+      }
+      refreshRectificationUI();
+      redrawMainCanvas();
+    }
+
+    function drawTriangulationOverlay() {
+      if (!state.triangulationEnabled || !state.triangulationData) return;
+      if (state.rectificationEnabled || state.differenceEnabled) return;
+
+      const mesh = state.triangulationData;
+      const vertices = mesh.vertices || [];
+      const triangles = mesh.triangles || [];
+      if (!vertices.length || !triangles.length) return;
+
+      ctx.save();
+
+      // Triangle edges
+      ctx.lineWidth = 1.15;
+      ctx.strokeStyle = "rgba(14, 165, 233, 0.62)";
+      for (const tri of triangles) {
+        const a = vertices[tri[0]], b = vertices[tri[1]], c = vertices[tri[2]];
+        if (!a || !b || !c) continue;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineTo(c.x, c.y);
+        ctx.closePath();
+        ctx.stroke();
+      }
+
+      // Validated centers are displayed by drawValidatedAffinityMarkers().
+      // Here we only draw a few small dots at vertices whose hexagon was re-detected.
+      ctx.fillStyle = "rgba(250, 204, 21, 0.92)";
+      for (const v of vertices) {
+        if (!v.checked) continue;
+        ctx.beginPath();
+        ctx.arc(v.x, v.y, 2.5, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+
+      // Small summary
+      ctx.font = "bold 13px Inter, Arial, sans-serif";
+      ctx.textBaseline = "top";
+      const label = `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors}`;
+      const pad = 7;
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(15, 23, 42, 0.82)";
+      ctx.fillRect(12, 12, tw + 2 * pad, 28);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(label, 12 + pad, 18);
+      ctx.restore();
+    }
+
+
     function drawValidatedAffinityMarkers() {
       if (!state.validatedAffinities || !state.validatedAffinities.length) return;
       ctx.save();
@@ -1252,6 +1552,7 @@
       else if (state.differenceEnabled && state.differenceImageData) imgToDraw = state.differenceImageData;
       if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
 
+      drawTriangulationOverlay();
       drawValidatedAffinityMarkers();
 
       // Patch overlay: visible only on the deformed view, because validation is done
@@ -2184,6 +2485,9 @@
       state.validatedAffinities.push(estimate);
       setValidationMessage(`OK - ${estimate.pairName} selected by phase corr vs whole reference (${estimate.phaseScore.toFixed(4)})`);
       recomputeRectification();
+      if (state.triangulationEnabled) {
+        state.triangulationData = buildTriangulationFromValidatedAffinities();
+      }
       refreshRectificationUI();
       renderValidatedPatchesPanel();
       redrawMainCanvas();
@@ -2199,6 +2503,8 @@
       state.rectificationTransform = null;
       state.globalHomography = null;
       state.globalHomographyInfo = null;
+      state.triangulationEnabled = false;
+      state.triangulationData = null;
       setValidationMessage("Ready");
       refreshRectificationUI();
       renderValidatedPatchesPanel();
@@ -2865,6 +3171,8 @@
       state.rectificationTransform = null;
       state.globalHomography = null;
       state.globalHomographyInfo = null;
+      state.triangulationEnabled = false;
+      state.triangulationData = null;
       syncControlsFromState();
       renderGeneratedTexture();
       if (state.autocorrEnabled) {
@@ -2968,6 +3276,15 @@
       btnTogglePatchView.addEventListener("click", () => {
         state.patchViewEnabled = !state.patchViewEnabled;
         renderValidatedPatchesPanel();
+      });
+    }
+
+    if (btnShowTriangulation) {
+      btnShowTriangulation.addEventListener("click", () => {
+        state.rectificationEnabled = false;
+        state.differenceEnabled = false;
+        state.triangulationEnabled = !state.triangulationEnabled;
+        refreshTriangulation();
       });
     }
 

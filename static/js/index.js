@@ -107,13 +107,15 @@
     const panelCylindrical = document.getElementById("panel-cylindrical");
     const panelShoulder = document.getElementById("panel-shoulder");
     const panelCrumpled = document.getElementById("panel-crumpled");
+    const panelTwoPlanes = document.getElementById("panel-two-planes");
 
     const controlIds = [
       "param-a-rot", "param-a-scalex", "param-a-scaley", "param-a-shearx", "param-a-sheary",
       "param-p-tiltx", "param-p-tilty", "param-p-focal", "param-p-zrot",
       "param-c-curv", "param-c-drop", "param-c-zrot", "param-c-vstretch",
       "param-s-span", "param-s-camera", "param-s-neck", "param-s-shoulder", "param-s-roll", "param-s-vstretch",
-      "param-r-amp", "param-r-freq", "param-r-persp", "param-r-roll", "param-r-twist", "param-r-shade"
+      "param-r-amp", "param-r-freq", "param-r-persp", "param-r-roll", "param-r-twist", "param-r-shade",
+      "param-tp-fold", "param-tp-viewx", "param-tp-viewy", "param-tp-viewz", "param-tp-focal", "param-tp-camera"
     ];
 
     const controls = {};
@@ -146,7 +148,13 @@
       rPersp: document.getElementById("val-r-persp"),
       rRoll: document.getElementById("val-r-roll"),
       rTwist: document.getElementById("val-r-twist"),
-      rShade: document.getElementById("val-r-shade")
+      rShade: document.getElementById("val-r-shade"),
+      tpFold: document.getElementById("val-tp-fold"),
+      tpViewX: document.getElementById("val-tp-viewx"),
+      tpViewY: document.getElementById("val-tp-viewy"),
+      tpViewZ: document.getElementById("val-tp-viewz"),
+      tpFocal: document.getElementById("val-tp-focal"),
+      tpCamera: document.getElementById("val-tp-camera")
     };
 
     const DEFAULTS = {
@@ -191,6 +199,14 @@
         zRotationDeg: 0,
         twist: 0.18,
         shade: 0.35
+      },
+      twoPlanes: {
+        foldAngleDeg: 115,
+        viewXDeg: 12,
+        viewYDeg: -28,
+        viewZDeg: 0,
+        focalScale: 1.00,
+        cameraDistance: 3.00
       }
     };
 
@@ -206,7 +222,7 @@
       previewContrast: 2.2,
       autocorrEnabled: false,
       peaksEnabled: false,
-      projectionModes: ["Affine", "Perspective", "Cylindrical", "Shoulder", "Crumpled"],
+      projectionModes: ["Affine", "Perspective", "Cylindrical", "Shoulder", "Crumpled", "Two Planes"],
       projectionIndex: 0,
       mouseX: 450,
       mouseY: 450,
@@ -220,6 +236,7 @@
       cylindrical: { ...DEFAULTS.cylindrical },
       shoulder: { ...DEFAULTS.shoulder },
       crumpled: { ...DEFAULTS.crumpled },
+      twoPlanes: { ...DEFAULTS.twoPlanes },
       previewComputeSize: 64,
       centerBlendRadius: 6,
 
@@ -659,6 +676,7 @@
       if (panelCylindrical) panelCylindrical.classList.toggle("is-active", mode === "Cylindrical");
       if (panelShoulder) panelShoulder.classList.toggle("is-active", mode === "Shoulder");
       if (panelCrumpled) panelCrumpled.classList.toggle("is-active", mode === "Crumpled");
+      if (panelTwoPlanes) panelTwoPlanes.classList.toggle("is-active", mode === "Two Planes");
       if (projectionModeLabel) projectionModeLabel.textContent = mode;
     }
 
@@ -699,6 +717,13 @@
       if (values.rRoll) values.rRoll.textContent = `${state.crumpled.zRotationDeg}°`;
       if (values.rTwist) values.rTwist.textContent = state.crumpled.twist.toFixed(2);
       if (values.rShade) values.rShade.textContent = state.crumpled.shade.toFixed(2);
+
+      if (values.tpFold) values.tpFold.textContent = `${state.twoPlanes.foldAngleDeg}°`;
+      if (values.tpViewX) values.tpViewX.textContent = `${state.twoPlanes.viewXDeg}°`;
+      if (values.tpViewY) values.tpViewY.textContent = `${state.twoPlanes.viewYDeg}°`;
+      if (values.tpViewZ) values.tpViewZ.textContent = `${state.twoPlanes.viewZDeg}°`;
+      if (values.tpFocal) values.tpFocal.textContent = state.twoPlanes.focalScale.toFixed(2);
+      if (values.tpCamera) values.tpCamera.textContent = state.twoPlanes.cameraDistance.toFixed(2);
 
       if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
@@ -744,6 +769,13 @@
       if (controls["param-r-roll"]) controls["param-r-roll"].value = String(state.crumpled.zRotationDeg);
       if (controls["param-r-twist"]) controls["param-r-twist"].value = String(state.crumpled.twist);
       if (controls["param-r-shade"]) controls["param-r-shade"].value = String(state.crumpled.shade);
+
+      if (controls["param-tp-fold"]) controls["param-tp-fold"].value = String(state.twoPlanes.foldAngleDeg);
+      if (controls["param-tp-viewx"]) controls["param-tp-viewx"].value = String(state.twoPlanes.viewXDeg);
+      if (controls["param-tp-viewy"]) controls["param-tp-viewy"].value = String(state.twoPlanes.viewYDeg);
+      if (controls["param-tp-viewz"]) controls["param-tp-viewz"].value = String(state.twoPlanes.viewZDeg);
+      if (controls["param-tp-focal"]) controls["param-tp-focal"].value = String(state.twoPlanes.focalScale);
+      if (controls["param-tp-camera"]) controls["param-tp-camera"].value = String(state.twoPlanes.cameraDistance);
 
       if (contrastSlider) contrastSlider.value = String(state.previewContrast);
 
@@ -791,6 +823,13 @@
       if (controls["param-r-roll"]) state.crumpled.zRotationDeg = parseInt(controls["param-r-roll"].value, 10);
       if (controls["param-r-twist"]) state.crumpled.twist = parseFloat(controls["param-r-twist"].value);
       if (controls["param-r-shade"]) state.crumpled.shade = parseFloat(controls["param-r-shade"].value);
+
+      if (controls["param-tp-fold"]) state.twoPlanes.foldAngleDeg = parseInt(controls["param-tp-fold"].value, 10);
+      if (controls["param-tp-viewx"]) state.twoPlanes.viewXDeg = parseInt(controls["param-tp-viewx"].value, 10);
+      if (controls["param-tp-viewy"]) state.twoPlanes.viewYDeg = parseInt(controls["param-tp-viewy"].value, 10);
+      if (controls["param-tp-viewz"]) state.twoPlanes.viewZDeg = parseInt(controls["param-tp-viewz"].value, 10);
+      if (controls["param-tp-focal"]) state.twoPlanes.focalScale = parseFloat(controls["param-tp-focal"].value);
+      if (controls["param-tp-camera"]) state.twoPlanes.cameraDistance = parseFloat(controls["param-tp-camera"].value);
 
       refreshControlLabels();
     }
@@ -1224,6 +1263,117 @@
       return out;
     }
 
+
+    function rotateVecX(v, a) {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [v[0], c * v[1] - s * v[2], s * v[1] + c * v[2]];
+    }
+
+    function rotateVecY(v, a) {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]];
+    }
+
+    function rotateVecZ(v, a) {
+      const c = Math.cos(a), s = Math.sin(a);
+      return [c * v[0] - s * v[1], s * v[0] + c * v[1], v[2]];
+    }
+
+    function rotateVecEulerXYZ(v, ax, ay, az) {
+      // Object/view rotation used by the two-plane projection.
+      // Order: X then Y then Z, which is intuitive for independent sliders.
+      return rotateVecZ(rotateVecY(rotateVecX(v, ax), ay), az);
+    }
+
+    function twoPlaneBasis(side) {
+      // Source coordinates are normalized: s in [-1, 1] horizontally,
+      // t in [-1, 1] vertically. The two planes are hinged at s = 0.
+      // foldAngleDeg = 180 gives a flat plane. Smaller values fold the two
+      // halves toward the camera like an open book.
+      const foldAngle = clamp(state.twoPlanes.foldAngleDeg, 40, 180);
+      const delta = degToRad((180.0 - foldAngle) * 0.5);
+      const sideAngle = side < 0 ? delta : -delta;
+      const ax = degToRad(state.twoPlanes.viewXDeg);
+      const ay = degToRad(state.twoPlanes.viewYDeg);
+      const az = degToRad(state.twoPlanes.viewZDeg);
+
+      const eS0 = rotateVecY([1, 0, 0], sideAngle);
+      const eT0 = [0, -1, 0];
+      const eS = normalizeVec3(rotateVecEulerXYZ(eS0, ax, ay, az));
+      const eT = normalizeVec3(rotateVecEulerXYZ(eT0, ax, ay, az));
+      const normal = normalizeVec3(crossVec3(eS, eT));
+      return { eS, eT, normal };
+    }
+
+    function rayToTwoPlanesSource(x, y, w, h) {
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+      const focalPx = Math.max(0.05, state.twoPlanes.focalScale) * Math.max(w, h);
+      const cameraDistance = Math.max(0.5, state.twoPlanes.cameraDistance);
+      const C = [0, 0, cameraDistance];
+      const D = normalizeVec3([x - cx, -(y - cy), -focalPx]);
+      let best = null;
+
+      for (const side of [-1, 1]) {
+        const basis = twoPlaneBasis(side);
+        const denom = dotVec3(basis.normal, D);
+        if (Math.abs(denom) < 1e-9) continue;
+
+        // The hinge passes through the origin, so the plane origin is O = (0,0,0).
+        const rayT = -dotVec3(basis.normal, C) / denom;
+        if (rayT <= 1e-6) continue;
+
+        const P = addVec3(C, scaleVec3(D, rayT));
+        const sCoord = dotVec3(P, basis.eS);
+        const tCoord = dotVec3(P, basis.eT);
+
+        const inSide = side < 0
+          ? (sCoord >= -1.0 && sCoord <= 0.0)
+          : (sCoord >= 0.0 && sCoord <= 1.0);
+        if (!inSide || tCoord < -1.0 || tCoord > 1.0) continue;
+
+        if (!best || rayT < best.rayT) {
+          best = { rayT, s: sCoord, t: tCoord, side, basis, point: P };
+        }
+      }
+
+      if (!best) return null;
+      return {
+        x: clamp((best.s + 1.0) * 0.5 * (w - 1), 0, w - 1),
+        y: clamp((best.t + 1.0) * 0.5 * (h - 1), 0, h - 1),
+        side: best.side,
+        point: best.point,
+        normal: best.basis.normal
+      };
+    }
+
+    function applyTwoPlanesProjection(imageData) {
+      const w = imageData.width;
+      const h = imageData.height;
+      const out = new ImageData(w, h);
+      const dst = out.data;
+      const cameraDistance = Math.max(0.5, state.twoPlanes.cameraDistance);
+      const C = [0, 0, cameraDistance];
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const hit = rayToTwoPlanesSource(x, y, w, h);
+          let gray = 255;
+          if (hit) {
+            gray = sampleGrayBilinear(imageData, hit.x, hit.y, 255);
+
+            // Very light shading makes the fold readable without changing the
+            // autocorrelation peak positions too aggressively.
+            const toCam = normalizeVec3(subVec3(C, hit.point));
+            const shade = clamp(0.72 + 0.28 * Math.abs(dotVec3(hit.normal, toCam)), 0.65, 1.0);
+            gray = 255 - (255 - gray) * shade;
+          }
+          setGrayPixel(dst, (y * w + x) * 4, gray);
+        }
+      }
+      return out;
+    }
+
     function applyCurrentProjection() {
       if (!state.sourceImageData) return;
       const mode = state.projectionModes[state.projectionIndex];
@@ -1232,7 +1382,9 @@
       else if (mode === "Perspective") result = applyPerspectiveProjection(state.sourceImageData);
       else if (mode === "Cylindrical") result = applyCylindricalProjection(state.sourceImageData);
       else if (mode === "Shoulder") result = applyShoulderProjection(state.sourceImageData);
-      else result = applyCrumpledProjection(state.sourceImageData);
+      else if (mode === "Crumpled") result = applyCrumpledProjection(state.sourceImageData);
+      else if (mode === "Two Planes") result = applyTwoPlanesProjection(state.sourceImageData);
+      else result = state.sourceImageData;
       state.displayedImageData = result;
       state.displayedCtx.putImageData(result, 0, 0);
       recomputeRectification();
@@ -2881,6 +3033,7 @@
       if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
       if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
       if (mode === "Cylindrical") return mapDisplayToSourceCylindrical(x, y);
+      if (mode === "Two Planes") return mapDisplayToSourceTwoPlanes(x, y);
       return { x, y };
     }
 
@@ -2969,6 +3122,13 @@
       const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
       const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
       return { x: clamp(uNorm * (w - 1), 0, w - 1), y: clamp(vNorm * (h - 1), 0, h - 1) };
+    }
+
+
+    function mapDisplayToSourceTwoPlanes(x, y) {
+      const hit = rayToTwoPlanesSource(x, y, state.size, state.size);
+      if (!hit) return null;
+      return { x: hit.x, y: hit.y };
     }
 
     function numericalJacobianDisplayToSource(x, y) {
@@ -3687,6 +3847,7 @@
       state.cylindrical = { ...DEFAULTS.cylindrical };
       state.shoulder = { ...DEFAULTS.shoulder };
       state.crumpled = { ...DEFAULTS.crumpled };
+      state.twoPlanes = { ...DEFAULTS.twoPlanes };
       state.patchSize = 90;
       state.previewContrast = 2.2;
       state.displayMode = "autocorr";

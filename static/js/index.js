@@ -280,10 +280,17 @@
       triangulationEnabled: false,
       triangulationData: null,
       triangulationOptions: {
-        gridRadius: 18,          // number of U/V steps around the average reference center
+        gridRadius: 18,          // number of displayed mesh steps around the average anchor
         maxTriangles: 2400,      // safety limit for browser performance
         idwPower: 2.0,           // inverse-distance weighting for local interpolation
-        detectStride: 3,         // optional local peak re-detection every N grid vertices
+        // The mesh is intentionally coarser than the autocorrelation lattice.
+        // A unit U/V cell split in two has triangle area |U x V| / 2.
+        // The full hexagon {±U, ±V, ±(U-V)} has area 3 |U x V|.
+        // To make each displayed triangle equal to half of this hexagon area,
+        // we need (meshStepFactor^2 |U x V|) / 2 = (3 |U x V|) / 2,
+        // hence meshStepFactor = sqrt(3).
+        meshStepFactor: Math.sqrt(3),
+        detectStride: 3,         // optional local peak re-detection every N displayed mesh vertices
         maxDetectionChecks: 120, // safety limit for extra peak checks
         minConfidence: 0.15
       }
@@ -1473,8 +1480,14 @@
       const U = latticeInfo.U;
       const V = latticeInfo.V;
       const radius = Math.max(3, Math.floor(state.triangulationOptions.gridRadius || 18));
+      const meshStepFactorRaw = Number(state.triangulationOptions.meshStepFactor);
+      const meshStepFactor = Number.isFinite(meshStepFactorRaw)
+        ? clamp(meshStepFactorRaw, 0.75, 4.0)
+        : Math.sqrt(3);
       const vertices = [];
       const index = new Map();
+      // Keys are integer display-grid coordinates. The actual coordinates in the
+      // autocorrelation lattice are i0 + meshStepFactor * di and j0 + meshStepFactor * dj.
       const keyOf = (i, j) => `${i},${j}`;
       const maxChecks = Math.max(0, Math.floor(state.triangulationOptions.maxDetectionChecks || 0));
       const detectStride = Math.max(1, Math.floor(state.triangulationOptions.detectStride || 3));
@@ -1490,7 +1503,15 @@
       const mU = applyMat2(avgM, U[0], U[1]);
       const mV = applyMat2(avgM, V[0], V[1]);
       const mW = applyMat2(avgM, U[0] - V[0], U[1] - V[1]);
-      const nominalStep = Math.max(4, Math.min(Math.hypot(mU.x, mU.y), Math.hypot(mV.x, mV.y), Math.hypot(mW.x, mW.y)));
+      const unitHexCrossArea = Math.abs(mU.x * mV.y - mU.y * mV.x);
+      const targetHalfHexagonArea = 1.5 * unitHexCrossArea;
+      const predictedTriangleArea = 0.5 * meshStepFactor * meshStepFactor * unitHexCrossArea;
+      const nominalUnitStep = Math.max(4, Math.min(
+        Math.hypot(mU.x, mU.y),
+        Math.hypot(mV.x, mV.y),
+        Math.hypot(mW.x, mW.y)
+      ));
+      const nominalStep = meshStepFactor * nominalUnitStep;
       const edgeMax = 2.6 * nominalStep;
 
       // Center the lattice sweep on the barycenter of validated anchor indices.
@@ -1504,8 +1525,12 @@
 
       for (let di = -radius; di <= radius; di++) {
         for (let dj = -radius; dj <= radius; dj++) {
-          const gi = i0 + di;
-          const gj = j0 + dj;
+          // Use a coarser displayed mesh: one displayed step corresponds to
+          // meshStepFactor times the detected local hexagon basis vectors.
+          // With meshStepFactor=sqrt(3), each rendered triangle has the same
+          // area as half of the detected hexagon.
+          const gi = i0 + meshStepFactor * di;
+          const gj = j0 + meshStepFactor * dj;
           const model = weightedLocalModelAtLattice(gi, gj, latticeInfo);
           if (!model) continue;
 
@@ -1525,11 +1550,13 @@
 
           if (x < -30 || x > state.size + 30 || y < -30 || y > state.size + 30) continue;
           const id = vertices.length;
-          index.set(keyOf(gi, gj), id);
+          index.set(keyOf(di, dj), id);
           vertices.push({
             id,
             i: gi,
             j: gj,
+            meshI: di,
+            meshJ: dj,
             refX: model.refX,
             refY: model.refY,
             x,
@@ -1553,12 +1580,10 @@
       const maxTriangles = Math.max(50, Math.floor(state.triangulationOptions.maxTriangles || 2400));
       for (let di = -radius; di < radius; di++) {
         for (let dj = -radius; dj < radius; dj++) {
-          const gi = i0 + di;
-          const gj = j0 + dj;
-          const aId = index.get(keyOf(gi, gj));
-          const bId = index.get(keyOf(gi + 1, gj));
-          const cId = index.get(keyOf(gi, gj + 1));
-          const dId = index.get(keyOf(gi + 1, gj + 1));
+          const aId = index.get(keyOf(di, dj));
+          const bId = index.get(keyOf(di + 1, dj));
+          const cId = index.get(keyOf(di, dj + 1));
+          const dId = index.get(keyOf(di + 1, dj + 1));
 
           const tryPush = (pId, qId, rId) => {
             if (pId == null || qId == null || rId == null) return;
@@ -1574,7 +1599,7 @@
 
           // Two triangles per lattice cell (parallelogram spanned by U and V).
           // Alternate the diagonal for a cleaner and more stable visual mesh.
-          if (((gi + gj) & 1) === 0) {
+          if (((di + dj) & 1) === 0) {
             tryPush(aId, bId, cId);
             tryPush(bId, dId, cId);
           } else {
@@ -1594,6 +1619,9 @@
         origin: { x: latticeInfo.baseRef.x, y: latticeInfo.baseRef.y },
         checkedDetections: checks,
         nominalStep,
+        meshStepFactor,
+        targetHalfHexagonArea,
+        predictedTriangleArea,
         consistentAnchors: anchors.map((a) => ({
           x: a.center.x,
           y: a.center.y,
@@ -1617,7 +1645,8 @@
         setValidationMessage("Triangulation failed: not enough valid local anchors");
       } else {
         state.triangulationData = mesh;
-        setValidationMessage(`Triangulation: ${mesh.triangles.length} triangles from ${mesh.anchors} validated anchors`);
+        const f = mesh.meshStepFactor ? mesh.meshStepFactor.toFixed(3) : "?";
+        setValidationMessage(`Triangulation: ${mesh.triangles.length} triangles from ${mesh.anchors} anchors | step=${f}× hexagon basis`);
       }
       refreshRectificationUI();
       redrawMainCanvas();
@@ -1659,7 +1688,8 @@
 
       ctx.font = "bold 13px Inter, Arial, sans-serif";
       ctx.textBaseline = "top";
-      const label = `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors}`;
+      const f = mesh.meshStepFactor ? mesh.meshStepFactor.toFixed(2) : "?";
+      const label = `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors} | step ${f}×`;
       const pad = 7;
       const tw = ctx.measureText(label).width;
       ctx.fillStyle = "rgba(15, 23, 42, 0.82)";

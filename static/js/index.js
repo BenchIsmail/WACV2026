@@ -3894,13 +3894,28 @@
       return H.map((row) => row.map((v) => v / norm));
     }
 
-    function frobeniusError3x3(A, B) {
+    function frobeniusErrorHomographyWithoutTranslationColumn(A, B) {
+      // Homographies are first normalized by H[2][2].
+      // Then we compare only the first two columns:
+      //
+      //   [ h11 h12 | h13 ]
+      //   [ h21 h22 | h23 ]
+      //   [ h31 h32 | h33 ]
+      //
+      // The translation column [h13, h23, h33]^T is ignored.
+      // The compared block is therefore:
+      //
+      //   [ h11 h12 ]
+      //   [ h21 h22 ]
+      //   [ h31 h32 ]
+      //
       if (!A || !B) return null;
       const A1 = normalizeHomography3x3(A);
       const B1 = normalizeHomography3x3(B);
+
       let s = 0.0;
       for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) {
+        for (let c = 0; c < 2; c++) {
           const a = Number(A1[r][c]);
           const b = Number(B1[r][c]);
           if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
@@ -4005,8 +4020,8 @@
         true_deformation_homography_source_to_deformed: exportMat3(Htrue),
         estimated_rectifying_homography_deformed_to_source: exportMat3(Hrect),
         estimated_deformation_homography_source_to_deformed: exportMat3(Hest),
-        frobenius_error_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusError3x3(Htrue, Hest)),
-        note: Htrue && Hest ? 'Frobenius norm computed on the two 3x3 homographies after normalization by H[2][2].' : 'Global homography comparison available only when both true and estimated homographies exist.'
+        frobenius_error_without_translation_column_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusErrorHomographyWithoutTranslationColumn(Htrue, Hest)),
+        note: Htrue && Hest ? 'Frobenius norm computed after normalization by H[2][2], using only the first two columns of each homography; the translation column is ignored.' : 'Global homography comparison available only when both true and estimated homographies exist.'
       };
     }
 

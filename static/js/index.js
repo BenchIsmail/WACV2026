@@ -3758,9 +3758,22 @@
       return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
     }
 
+    function exportVec3(v, digits = 6) {
+      if (!v || v.length < 3) return null;
+      return [
+        roundNumberForExport(Number(v[0]), digits),
+        roundNumberForExport(Number(v[1]), digits),
+        roundNumberForExport(Number(v[2]), digits)
+      ];
+    }
+
     function exportMat3(M, digits = 6) {
       if (!M || !M[0] || !M[1] || !M[2]) return null;
-      return [exportVec2(M[0], digits), exportVec2(M[1], digits), exportVec2(M[2], digits)];
+      return [
+        exportVec3(M[0], digits),
+        exportVec3(M[1], digits),
+        exportVec3(M[2], digits)
+      ];
     }
 
     function exportSafeNumber(value, digits = 6) {
@@ -3906,35 +3919,51 @@
       return s / Math.max(1, n);
     }
 
-    function computePixelRectificationError200x200() {
-      if (!state.sourceImageData || !state.rectificationImageData) return null;
-      const src = state.sourceImageData;
-      const rec = state.rectificationImageData;
-      if (src.width !== rec.width || src.height !== rec.height) return null;
-      const crop = Math.min(200, src.width, src.height);
-      const x0 = Math.floor((src.width - crop) / 2);
-      const y0 = Math.floor((src.height - crop) / 2);
-      let n = 0, sumAbs = 0.0, sumSq = 0.0, maxAbs = 0.0;
+    function computeGeometricDeformationError200x200(Htrue, Hestimated) {
+      if (!Htrue || !Hestimated) return null;
+
+      const crop = Math.min(200, state.size, state.size);
+      const x0 = Math.floor((state.size - crop) / 2);
+      const y0 = Math.floor((state.size - crop) / 2);
+
+      let n = 0;
+      let sum = 0.0;
+      let sumSq = 0.0;
+      let maxErr = 0.0;
+
       for (let y = y0; y < y0 + crop; y++) {
         for (let x = x0; x < x0 + crop; x++) {
-          const k = (y * src.width + x) * 4;
-          const d = Number(rec.data[k]) - Number(src.data[k]);
-          const ad = Math.abs(d);
-          sumAbs += ad;
-          sumSq += d * d;
-          maxAbs = Math.max(maxAbs, ad);
+          const pTrue = applyHomographyPoint(Htrue, [x, y]);
+          const pEst = applyHomographyPoint(Hestimated, [x, y]);
+
+          if (!pTrue || !pEst) continue;
+          const dx = pEst[0] - pTrue[0];
+          const dy = pEst[1] - pTrue[1];
+          if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+
+          const e = Math.sqrt(dx * dx + dy * dy);
+          sum += e;
+          sumSq += e * e;
+          maxErr = Math.max(maxErr, e);
           n++;
         }
       }
+
       return {
         crop_size_px: crop,
-        crop_origin_xy: { x: x0, y: y0 },
+        crop_origin_xy_in_source_image: { x: x0, y: y0 },
         compared_pixels: n,
-        mae_gray_level: roundNumberForExport(sumAbs / Math.max(1, n)),
-        rmse_gray_level: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
-        max_abs_gray_level: roundNumberForExport(maxAbs),
-        convention: 'central 200x200 crop, grayscale error between rectified image and original source texture'
+        mean_transfer_error_px: roundNumberForExport(sum / Math.max(1, n)),
+        rmse_transfer_error_px: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
+        max_transfer_error_px: roundNumberForExport(maxErr),
+        convention: "central 200x200 source pixels are projected by H_true and H_estimated; error is Euclidean distance in the deformed image, in pixels"
       };
+    }
+
+    function computePixelRectificationError200x200() {
+      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
+      const Hestimated = computeEstimatedDeformationHomographySourceToDisplayed();
+      return computeGeometricDeformationError200x200(Htrue, Hestimated);
     }
 
     function computeTrueDeformationHomographySourceToDisplayed() {
@@ -3977,7 +4006,7 @@
         estimated_rectifying_homography_deformed_to_source: exportMat3(Hrect),
         estimated_deformation_homography_source_to_deformed: exportMat3(Hest),
         frobenius_error_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusError3x3(Htrue, Hest)),
-        note: Htrue && Hest ? 'Frobenius norm computed after homography normalization by H[2][2].' : 'Global homography comparison available only when both true and estimated homographies exist.'
+        note: Htrue && Hest ? 'Frobenius norm computed on the two 3x3 homographies after normalization by H[2][2].' : 'Global homography comparison available only when both true and estimated homographies exist.'
       };
     }
 
@@ -4084,7 +4113,7 @@
           validated_affinities_count: state.validatedAffinities.length,
           rectification_enabled: Boolean(state.rectificationEnabled),
           has_rectification_image: Boolean(state.rectificationImageData),
-          pixel_rectification_error_200x200: computePixelRectificationError200x200(),
+          geometric_deformation_error_200x200_px: computePixelRectificationError200x200(),
           global_homography_comparison: computeGlobalHomographyComparison(),
           rectification_solver_info: state.globalHomographyInfo || null
         },

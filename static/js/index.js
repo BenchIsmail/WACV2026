@@ -3994,27 +3994,44 @@
     }
 
     function saveValidatedPeaksDetails() {
+      // Always try to download a diagnostic JSON. This makes the button useful even
+      // when the global rectification is not yet available. Missing metrics are saved
+      // as null instead of blocking the download.
       if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage("No validated deformation to save. Validate at least one local affinity first.");
+        setValidationMessage("Nothing to save yet: validate at least one local affinity first.");
+        window.alert("Nothing to save yet: validate at least one local affinity first.");
         return;
       }
 
-      if (!state.rectificationImageData) recomputeRectification();
       if (!state.rectificationImageData) {
-        setValidationMessage("Rectification is not available. Validate at least 3 affinities, click Rectify, then save deformation details.");
-        return;
+        try {
+          recomputeRectification();
+        } catch (err) {
+          console.warn("Rectification recomputation failed before export:", err);
+        }
       }
 
       const payload = makeValidatedPeaksExportPayload();
+      payload.export_warning = state.rectificationImageData
+        ? null
+        : "Global rectification image was not available at export time. Pixel rectification metrics may be null. Validate at least 3 local affinities and click Rectify to obtain full metrics.";
+
       const folderName = payload.save_folder_name || deformationDetailsFolderName();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-
-      // Browser security does not allow a classic web page to create a real folder directly.
-      // The filename starts with the requested folder name, so downloads stay traceable and can
-      // be moved into a folder with the same name if needed.
       const filename = `${folderName}__deformation_details_${stamp}.json`;
-      downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
-      setValidationMessage(`Saved deformation details for ${payload.validated_count} validated patch${payload.validated_count > 1 ? "es" : ""}`);
+
+      try {
+        downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
+        setValidationMessage(`Download started: ${filename}`);
+        window.alert(`Download started:
+${filename}
+
+Check your Downloads folder.`);
+      } catch (err) {
+        console.error("Could not download deformation details:", err);
+        setValidationMessage("Download failed. See the browser console for details.");
+        window.alert("Download failed. Open the browser console and send me the red error.");
+      }
     }
 
     // =========================================================

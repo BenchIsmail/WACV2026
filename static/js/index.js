@@ -3680,35 +3680,158 @@
       return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
     }
 
-
-    function exportMat3ForDeformationDetails(M, digits = 6) {
+    function exportMat3(M, digits = 6) {
       if (!M || !M[0] || !M[1] || !M[2]) return null;
-      return M.slice(0, 3).map((row) => row.slice(0, 3).map((v) => roundNumberForExport(Number(v), digits)));
+      return [
+        [roundNumberForExport(Number(M[0][0]), digits), roundNumberForExport(Number(M[0][1]), digits), roundNumberForExport(Number(M[0][2]), digits)],
+        [roundNumberForExport(Number(M[1][0]), digits), roundNumberForExport(Number(M[1][1]), digits), roundNumberForExport(Number(M[1][2]), digits)],
+        [roundNumberForExport(Number(M[2][0]), digits), roundNumberForExport(Number(M[2][1]), digits), roundNumberForExport(Number(M[2][2]), digits)]
+      ];
     }
 
-    function frobeniusError2x2ForDeformationDetails(A, B) {
+    function exportSafeNumber(value, digits = 4) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return roundNumberForExport(n, digits);
+    }
+
+    function filenameSafeNumber(value, digits = 3) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return "na";
+      return n.toFixed(digits).replace("-", "m").replace(".", "p");
+    }
+
+    function sanitizeFilenamePart(str) {
+      return String(str || "")
+        .trim()
+        .replace(/\s+/g, "_")
+        .replace(/[^a-zA-Z0-9_\-]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "") || "value";
+    }
+
+    function getCurrentDeformationParameters() {
+      const mode = state.projectionModes[state.projectionIndex] || "Unknown";
+
+      if (mode === "Affine") {
+        return {
+          mode,
+          parameters: {
+            rotation_z_deg: exportSafeNumber(state.affine.rotationDeg),
+            scale_x: exportSafeNumber(state.affine.scaleX),
+            scale_y: exportSafeNumber(state.affine.scaleY),
+            shear_x: exportSafeNumber(state.affine.shearX),
+            shear_y: exportSafeNumber(state.affine.shearY)
+          }
+        };
+      }
+
+      if (mode === "Perspective") {
+        return {
+          mode,
+          parameters: {
+            angle_vue_x_tilt_parameter: exportSafeNumber(state.perspective.tiltX),
+            angle_vue_y_tilt_parameter: exportSafeNumber(state.perspective.tiltY),
+            angle_vue_x_deg_atan_tilt: exportSafeNumber(radToDeg(Math.atan(Number(state.perspective.tiltX) || 0))),
+            angle_vue_y_deg_atan_tilt: exportSafeNumber(radToDeg(Math.atan(Number(state.perspective.tiltY) || 0))),
+            focal_scale: exportSafeNumber(state.perspective.focalScale),
+            rotation_z_deg: exportSafeNumber(state.perspective.zRotationDeg)
+          }
+        };
+      }
+
+      if (mode === "Cylindrical") {
+        return {
+          mode,
+          parameters: {
+            angular_span: exportSafeNumber(state.cylindrical.curvature),
+            camera_distance: exportSafeNumber(state.cylindrical.perspectiveDrop),
+            camera_roll_deg: exportSafeNumber(state.cylindrical.zRotationDeg),
+            label_height: exportSafeNumber(state.cylindrical.verticalStretch)
+          }
+        };
+      }
+
+      if (mode === "Shoulder") {
+        return {
+          mode,
+          parameters: {
+            angular_span: exportSafeNumber(state.shoulder.angularSpan),
+            camera_distance: exportSafeNumber(state.shoulder.cameraDistance),
+            neck_radius: exportSafeNumber(state.shoulder.neckRadius),
+            shoulder_length: exportSafeNumber(state.shoulder.shoulderLength),
+            camera_roll_deg: exportSafeNumber(state.shoulder.zRotationDeg),
+            label_height: exportSafeNumber(state.shoulder.verticalStretch)
+          }
+        };
+      }
+
+      if (mode === "Crumpled") {
+        return {
+          mode,
+          parameters: {
+            crumple_amplitude: exportSafeNumber(state.crumpled.amplitude),
+            crease_frequency: exportSafeNumber(state.crumpled.frequency),
+            perspective: exportSafeNumber(state.crumpled.perspective),
+            camera_roll_deg: exportSafeNumber(state.crumpled.zRotationDeg),
+            twist: exportSafeNumber(state.crumpled.twist),
+            shading: exportSafeNumber(state.crumpled.shade)
+          }
+        };
+      }
+
+      if (mode === "Two Planes") {
+        return {
+          mode,
+          parameters: {
+            angle_between_planes_deg: exportSafeNumber(state.twoPlanes.foldAngleDeg),
+            angle_vue_x_deg: exportSafeNumber(state.twoPlanes.viewXDeg),
+            angle_vue_y_deg: exportSafeNumber(state.twoPlanes.viewYDeg),
+            angle_vue_z_deg: exportSafeNumber(state.twoPlanes.viewZDeg),
+            focal_scale: exportSafeNumber(state.twoPlanes.focalScale),
+            camera_distance: exportSafeNumber(state.twoPlanes.cameraDistance)
+          }
+        };
+      }
+
+      return { mode, parameters: {} };
+    }
+
+    function buildDeformationFilenameBase() {
+      const deform = getCurrentDeformationParameters();
+      const parts = ["deformation", sanitizeFilenamePart(deform.mode).toLowerCase()];
+      Object.entries(deform.parameters || {}).forEach(([key, value]) => {
+        if (value === null || value === undefined) return;
+        parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
+      });
+      return parts.join("__");
+    }
+
+    function frobeniusError2x2(A, B) {
       if (!A || !B || !A[0] || !A[1] || !B[0] || !B[1]) return null;
       let s = 0.0;
       for (let r = 0; r < 2; r++) {
         for (let c = 0; c < 2; c++) {
-          const d = Number(A[r][c]) - Number(B[r][c]);
-          if (!Number.isFinite(d)) return null;
+          const a = Number(A[r][c]);
+          const b = Number(B[r][c]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const d = a - b;
           s += d * d;
         }
       }
       return Math.sqrt(s);
     }
 
-    function summarizeErrorsForDeformationDetails(values) {
-      const arr = values.filter((v) => Number.isFinite(v));
-      if (!arr.length) return { count: 0, mean: null, rmse: null, min: null, max: null };
-      let sum = 0.0, sum2 = 0.0, mn = arr[0], mx = arr[0];
-      for (const v of arr) {
+    function summarizeNumericErrors(values) {
+      const arr = (values || []).filter((v) => Number.isFinite(v));
+      if (!arr.length) return null;
+      let sum = 0.0, sum2 = 0.0, mn = Infinity, mx = -Infinity;
+      arr.forEach((v) => {
         sum += v;
         sum2 += v * v;
-        if (v < mn) mn = v;
-        if (v > mx) mx = v;
-      }
+        mn = Math.min(mn, v);
+        mx = Math.max(mx, v);
+      });
       return {
         count: arr.length,
         mean: roundNumberForExport(sum / arr.length),
@@ -3718,15 +3841,17 @@
       };
     }
 
-    function computePixelRectificationError200ForDeformationDetails() {
+    function computePixelRectificationError200x200() {
       if (!state.sourceImageData || !state.rectificationImageData) return null;
       const src = state.sourceImageData;
       const rec = state.rectificationImageData;
       if (src.width !== rec.width || src.height !== rec.height) return null;
+
       const crop = Math.min(200, src.width, src.height);
       const x0 = Math.floor((src.width - crop) / 2);
       const y0 = Math.floor((src.height - crop) / 2);
       let n = 0, sumAbs = 0.0, sumSq = 0.0, maxAbs = 0.0;
+
       for (let y = y0; y < y0 + crop; y++) {
         for (let x = x0; x < x0 + crop; x++) {
           const k = (y * src.width + x) * 4;
@@ -3734,10 +3859,11 @@
           const ad = Math.abs(d);
           sumAbs += ad;
           sumSq += d * d;
-          if (ad > maxAbs) maxAbs = ad;
+          maxAbs = Math.max(maxAbs, ad);
           n++;
         }
       }
+
       return {
         crop_size_px: crop,
         crop_origin_xy: { x: x0, y: y0 },
@@ -3745,11 +3871,11 @@
         mae_gray_level: roundNumberForExport(sumAbs / Math.max(1, n)),
         rmse_gray_level: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
         max_abs_gray_level: roundNumberForExport(maxAbs),
-        convention: "central 200x200 crop, grayscale error between rectified image and original texture"
+        convention: "central 200x200 crop, grayscale error between rectified image and original source texture"
       };
     }
 
-    function trueForwardDeformationMatrixAtForDeformationDetails(x, y) {
+    function trueForwardDeformationMatrixAt(x, y) {
       try {
         const Jrect = numericalJacobianDisplayToSource(x, y);
         if (!Jrect) return null;
@@ -3759,7 +3885,7 @@
       }
     }
 
-    function estimatedForwardMatrixFromGlobalHomographyForDeformationDetails(x, y) {
+    function estimatedForwardMatrixFromGlobalHomographyAt(x, y) {
       if (!state.globalHomography) return null;
       try {
         const JrectEstimated = jacobianHomographyAtInput(state.globalHomography, x, y);
@@ -3769,15 +3895,16 @@
       }
     }
 
-    function computeLocalFrobeniusForDeformationDetails() {
+    function computeLocalFrobeniusErrors() {
       return (state.validatedAffinities || []).map((item, idx) => {
         const cx = item.center && Number.isFinite(item.center.x) ? item.center.x : state.size / 2;
         const cy = item.center && Number.isFinite(item.center.y) ? item.center.y : state.size / 2;
-        const trueForward = trueForwardDeformationMatrixAtForDeformationDetails(cx, cy);
+        const trueForward = trueForwardDeformationMatrixAt(cx, cy);
         const estimatedLocal = item.M || null;
-        const estimatedGlobal = estimatedForwardMatrixFromGlobalHomographyForDeformationDetails(cx, cy);
-        const eLocal = frobeniusError2x2ForDeformationDetails(trueForward, estimatedLocal);
-        const eGlobal = frobeniusError2x2ForDeformationDetails(trueForward, estimatedGlobal);
+        const estimatedGlobal = estimatedForwardMatrixFromGlobalHomographyAt(cx, cy);
+        const eLocal = frobeniusError2x2(trueForward, estimatedLocal);
+        const eGlobal = frobeniusError2x2(trueForward, estimatedGlobal);
+
         return {
           id: idx + 1,
           center_xy_deformed_image: exportPoint({ x: cx, y: cy }),
@@ -3790,39 +3917,18 @@
       });
     }
 
-    function computeGlobalFrobeniusForDeformationDetails() {
+    function computeGlobalFrobeniusAtCenter() {
       const cx = state.size / 2;
       const cy = state.size / 2;
-      const trueForward = trueForwardDeformationMatrixAtForDeformationDetails(cx, cy);
-      const estimatedForward = estimatedForwardMatrixFromGlobalHomographyForDeformationDetails(cx, cy);
+      const trueForward = trueForwardDeformationMatrixAt(cx, cy);
+      const estimatedForward = estimatedForwardMatrixFromGlobalHomographyAt(cx, cy);
       return {
         evaluation_point_xy: [roundNumberForExport(cx), roundNumberForExport(cy)],
         true_forward_deformation_matrix_source_to_deformed: exportMat2(trueForward),
         estimated_forward_matrix_from_global_rectification: exportMat2(estimatedForward),
-        frobenius_error_at_center: roundNumberForExport(frobeniusError2x2ForDeformationDetails(trueForward, estimatedForward)),
+        frobenius_error_at_center: roundNumberForExport(frobeniusError2x2(trueForward, estimatedForward)),
         note: "For non-affine deformations, this is evaluated at the image center because the true Jacobian varies spatially."
       };
-    }
-
-    function viewAnglesForDeformationDetails() {
-      const mode = state.projectionModes[state.projectionIndex];
-      if (mode === "Two Planes") {
-        return { x_deg: state.twoPlanes.viewXDeg, y_deg: state.twoPlanes.viewYDeg };
-      }
-      if (mode === "Perspective") {
-        return {
-          x_deg: radToDeg(Math.atan(Number(state.perspective.tiltX) || 0)),
-          y_deg: radToDeg(Math.atan(Number(state.perspective.tiltY) || 0))
-        };
-      }
-      return { x_deg: 0, y_deg: 0 };
-    }
-
-    function deformationDetailsFolderName() {
-      const a = viewAnglesForDeformationDetails();
-      const fx = String(roundNumberForExport(a.x_deg, 2)).replace("-", "m").replace(".", "p");
-      const fy = String(roundNumberForExport(a.y_deg, 2)).replace("-", "m").replace(".", "p");
-      return `angle_vue_x_${fx}deg__angle_vue_y_${fy}deg`;
     }
 
     function makePeakPositionExport(item) {
@@ -3897,21 +4003,18 @@
       const U = refs.U;
       const V = refs.V;
       const W = [U[0] - V[0], U[1] - V[1]];
+      const deform = getCurrentDeformationParameters();
+      const localFrobeniusErrors = computeLocalFrobeniusErrors();
 
       return {
-        export_version: 1,
+        export_version: 2,
         created_at: new Date().toISOString(),
         image_size_px: {
           width: state.size,
           height: state.size
         },
-        projection_mode: state.projectionModes[state.projectionIndex],
-        save_folder_name: deformationDetailsFolderName(),
-        view_angles_deg: {
-          x: roundNumberForExport(viewAnglesForDeformationDetails().x_deg),
-          y: roundNumberForExport(viewAnglesForDeformationDetails().y_deg),
-          convention: "Perspective mode: angle = atan(tilt) in degrees. Two Planes mode: direct View angle sliders."
-        },
+        projection_mode: deform.mode,
+        deformation_parameters: deform.parameters,
         texture_parameters: {
           black_occupancy: state.texture.occupancy,
           dilation_radius: state.texture.dilationSize,
@@ -3928,24 +4031,21 @@
           minus_V: exportVec2([-V[0], -V[1]]),
           minus_W: exportVec2([-W[0], -W[1]])
         },
-        rectification_details: (() => {
-          const localErrors = computeLocalFrobeniusForDeformationDetails();
-          return {
-            rectification_enabled: Boolean(state.rectificationEnabled),
-            has_rectification_image: Boolean(state.rectificationImageData),
-            estimated_rectifying_homography_deformed_to_source: exportMat3ForDeformationDetails(state.globalHomography),
-            rectification_solver_info: state.globalHomographyInfo || null,
-            pixel_rectification_error_200x200: computePixelRectificationError200ForDeformationDetails(),
-            global_frobenius_error: computeGlobalFrobeniusForDeformationDetails(),
-            local_frobenius_errors: localErrors,
-            local_frobenius_summary_true_vs_validated_local_affinity: summarizeErrorsForDeformationDetails(
-              localErrors.map((e) => e.frobenius_true_vs_validated_local_affinity)
-            ),
-            local_frobenius_summary_true_vs_global_rectification: summarizeErrorsForDeformationDetails(
-              localErrors.map((e) => e.frobenius_true_vs_global_rectification)
-            )
-          };
-        })(),
+        rectification_details: {
+          rectification_enabled: Boolean(state.rectificationEnabled),
+          has_rectification_image: Boolean(state.rectificationImageData),
+          estimated_rectifying_homography_deformed_to_source: exportMat3(state.globalHomography),
+          rectification_solver_info: state.globalHomographyInfo || null,
+          pixel_rectification_error_200x200: computePixelRectificationError200x200(),
+          global_frobenius_error_at_center: computeGlobalFrobeniusAtCenter(),
+          local_frobenius_errors: localFrobeniusErrors,
+          local_frobenius_summary_true_vs_validated_local_affinity: summarizeNumericErrors(
+            localFrobeniusErrors.map((e) => e.frobenius_true_vs_validated_local_affinity)
+          ),
+          local_frobenius_summary_true_vs_global_rectification: summarizeNumericErrors(
+            localFrobeniusErrors.map((e) => e.frobenius_true_vs_global_rectification)
+          )
+        },
         validated_count: state.validatedAffinities.length,
         validated_patches: state.validatedAffinities.map((item, idx) => ({
           id: idx + 1,
@@ -3994,44 +4094,35 @@
     }
 
     function saveValidatedPeaksDetails() {
-      // Always try to download a diagnostic JSON. This makes the button useful even
-      // when the global rectification is not yet available. Missing metrics are saved
-      // as null instead of blocking the download.
       if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage("Nothing to save yet: validate at least one local affinity first.");
-        window.alert("Nothing to save yet: validate at least one local affinity first.");
+        setValidationMessage("No validated deformation to save. Validate at least one affinity first.");
         return;
       }
 
-      if (!state.rectificationImageData) {
-        try {
-          recomputeRectification();
-        } catch (err) {
-          console.warn("Rectification recomputation failed before export:", err);
-        }
-      }
-
       const payload = makeValidatedPeaksExportPayload();
-      payload.export_warning = state.rectificationImageData
-        ? null
-        : "Global rectification image was not available at export time. Pixel rectification metrics may be null. Validate at least 3 local affinities and click Rectify to obtain full metrics.";
-
-      const folderName = payload.save_folder_name || deformationDetailsFolderName();
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `${folderName}__deformation_details_${stamp}.json`;
+      const baseName = buildDeformationFilenameBase();
+      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
+      const jsonText = JSON.stringify(payload, null, 2);
 
-      try {
-        downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
-        setValidationMessage(`Download started: ${filename}`);
-        window.alert(`Download started:
-${filename}
+      // Robust browser download, including Safari.
+      const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.style.display = "none";
+      document.body.appendChild(a);
 
-Check your Downloads folder.`);
-      } catch (err) {
-        console.error("Could not download deformation details:", err);
-        setValidationMessage("Download failed. See the browser console for details.");
-        window.alert("Download failed. Open the browser console and send me the red error.");
-      }
+      window.setTimeout(() => {
+        a.click();
+        window.setTimeout(() => {
+          URL.revokeObjectURL(url);
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 500);
+      }, 0);
+
+      setValidationMessage(`Saved ${payload.validated_count} deformation detail${payload.validated_count > 1 ? "s" : ""} to ${filename}`);
     }
 
     // =========================================================

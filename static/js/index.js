@@ -66,7 +66,7 @@
     const btnToggleRectification = document.getElementById("btn-toggle-rectification");
     const btnTogglePatchView = document.getElementById("btn-toggle-patch-view");
     const btnShowTriangulation = document.getElementById("btn-show-triangulation");
-    const btnSavePeaksDetails = document.getElementById("btn-save-peaks-details");
+    const btnSaveDeformationDetails = document.getElementById("btn-save-peaks-details");
     const btnClearAffinities = document.getElementById("btn-clear-affinities");
 
     let btnDetectPeaks = document.getElementById("btn-detect-peaks");
@@ -694,8 +694,8 @@
       if (values.aShearX) values.aShearX.textContent = state.affine.shearX.toFixed(2);
       if (values.aShearY) values.aShearY.textContent = state.affine.shearY.toFixed(2);
 
-      if (values.pTiltX) values.pTiltX.textContent = state.perspective.tiltX.toFixed(2);
-      if (values.pTiltY) values.pTiltY.textContent = state.perspective.tiltY.toFixed(2);
+      if (values.pTiltX) values.pTiltX.textContent = deformationParamToViewAngleDeg(state.perspective.tiltX).toFixed(1) + "°";
+      if (values.pTiltY) values.pTiltY.textContent = deformationParamToViewAngleDeg(state.perspective.tiltY).toFixed(1) + "°";
       if (values.pFocal) values.pFocal.textContent = state.perspective.focalScale.toFixed(2);
       if (values.pZRot) values.pZRot.textContent = `${state.perspective.zRotationDeg}°`;
 
@@ -746,8 +746,8 @@
       if (controls["param-a-shearx"]) controls["param-a-shearx"].value = String(state.affine.shearX);
       if (controls["param-a-sheary"]) controls["param-a-sheary"].value = String(state.affine.shearY);
 
-      if (controls["param-p-tiltx"]) controls["param-p-tiltx"].value = String(state.perspective.tiltX);
-      if (controls["param-p-tilty"]) controls["param-p-tilty"].value = String(state.perspective.tiltY);
+      if (controls["param-p-tiltx"]) controls["param-p-tiltx"].value = String(deformationParamToViewAngleDeg(state.perspective.tiltX));
+      if (controls["param-p-tilty"]) controls["param-p-tilty"].value = String(deformationParamToViewAngleDeg(state.perspective.tiltY));
       if (controls["param-p-focal"]) controls["param-p-focal"].value = String(state.perspective.focalScale);
       if (controls["param-p-zrot"]) controls["param-p-zrot"].value = String(state.perspective.zRotationDeg);
 
@@ -800,8 +800,8 @@
       if (controls["param-a-shearx"]) state.affine.shearX = parseFloat(controls["param-a-shearx"].value);
       if (controls["param-a-sheary"]) state.affine.shearY = parseFloat(controls["param-a-sheary"].value);
 
-      if (controls["param-p-tiltx"]) state.perspective.tiltX = parseFloat(controls["param-p-tiltx"].value);
-      if (controls["param-p-tilty"]) state.perspective.tiltY = parseFloat(controls["param-p-tilty"].value);
+      if (controls["param-p-tiltx"]) state.perspective.tiltX = Math.tan(degToRad(parseFloat(controls["param-p-tiltx"].value)));
+      if (controls["param-p-tilty"]) state.perspective.tiltY = Math.tan(degToRad(parseFloat(controls["param-p-tilty"].value)));
       if (controls["param-p-focal"]) state.perspective.focalScale = parseFloat(controls["param-p-focal"].value);
       if (controls["param-p-zrot"]) state.perspective.zRotationDeg = parseInt(controls["param-p-zrot"].value, 10);
 
@@ -3654,7 +3654,7 @@
 
 
     // =========================================================
-    // SAVE VALIDATED PEAK DETAILS
+    // SAVE DEFORMATION DETAILS
     // =========================================================
     function roundNumberForExport(v, digits = 6) {
       if (!Number.isFinite(v)) return null;
@@ -3678,6 +3678,291 @@
     function exportMat2(M, digits = 6) {
       if (!M || !M[0] || !M[1]) return null;
       return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
+    }
+
+
+    function exportMat3(M, digits = 6) {
+      if (!M || !M[0] || !M[1] || !M[2]) return null;
+      return [exportVec2(M[0], digits).concat([roundNumberForExport(M[0][2], digits)]),
+              exportVec2(M[1], digits).concat([roundNumberForExport(M[1][2], digits)]),
+              exportVec2(M[2], digits).concat([roundNumberForExport(M[2][2], digits)])];
+    }
+
+    function mat2Sub(A, B) {
+      if (!A || !B) return null;
+      return [[A[0][0] - B[0][0], A[0][1] - B[0][1]], [A[1][0] - B[1][0], A[1][1] - B[1][1]]];
+    }
+
+    function mat3Sub(A, B) {
+      if (!A || !B) return null;
+      return A.map((row, i) => row.map((v, j) => v - B[i][j]));
+    }
+
+    function mat3Frobenius(M) {
+      if (!M) return Infinity;
+      let s = 0;
+      for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) s += M[i][j] * M[i][j];
+      return Math.sqrt(s);
+    }
+
+    function normalizeHomographyForExport(H) {
+      if (!H) return null;
+      let out = H.map((r) => r.slice());
+      const s = Math.abs(out[2][2]) > 1e-12 ? out[2][2] : mat3Frobenius(out);
+      if (Math.abs(s) > 1e-12) out = out.map((r) => r.map((v) => v / s));
+      return out;
+    }
+
+    function deformationParamToViewAngleDeg(v) {
+      return radToDeg(Math.atan(Number(v) || 0));
+    }
+
+    function getProjectionParametersForExport() {
+      return {
+        affine: { ...state.affine },
+        perspective: {
+          view_angle_x_deg: roundNumberForExport(deformationParamToViewAngleDeg(state.perspective.tiltX)),
+          view_angle_y_deg: roundNumberForExport(deformationParamToViewAngleDeg(state.perspective.tiltY)),
+          internal_tilt_x: state.perspective.tiltX,
+          internal_tilt_y: state.perspective.tiltY,
+          focal_scale: state.perspective.focalScale,
+          rotation_z_deg: state.perspective.zRotationDeg
+        },
+        cylindrical: { ...state.cylindrical },
+        shoulder: { ...state.shoulder },
+        crumpled: { ...state.crumpled },
+        two_planes: { ...state.twoPlanes }
+      };
+    }
+
+    function slugNumber(v, digits = 1) {
+      const n = Number.isFinite(v) ? v : 0;
+      return String(Math.round(n * Math.pow(10, digits)) / Math.pow(10, digits)).replace('-', 'm').replace('.', 'p');
+    }
+
+    function getCurrentViewAnglesDeg() {
+      const mode = state.projectionModes[state.projectionIndex];
+      if (mode === "Perspective") {
+        return {
+          x: deformationParamToViewAngleDeg(state.perspective.tiltX),
+          y: deformationParamToViewAngleDeg(state.perspective.tiltY),
+          source: "Perspective sliders, converted from internal tilt with atan(tilt)."
+        };
+      }
+      if (mode === "Two Planes") {
+        return {
+          x: state.twoPlanes.viewXDeg,
+          y: state.twoPlanes.viewYDeg,
+          z: state.twoPlanes.viewZDeg,
+          source: "Two Planes view angle sliders."
+        };
+      }
+      if (mode === "Affine") {
+        return { x: 0, y: 0, z: state.affine.rotationDeg, source: "Affine mode has no view-angle X/Y; X=0 and Y=0 are exported." };
+      }
+      return { x: 0, y: 0, source: `${mode} mode has no explicit view-angle X/Y; X=0 and Y=0 are exported.` };
+    }
+
+    function getDeformationFolderName() {
+      const a = getCurrentViewAnglesDeg();
+      return `angle_vue_x_${slugNumber(a.x)}deg__angle_vue_y_${slugNumber(a.y)}deg`;
+    }
+
+    function computePixelRectificationError200() {
+      if (!state.sourceImageData || !state.rectificationImageData) return null;
+      const A = state.sourceImageData;
+      const B = state.rectificationImageData;
+      const crop = 200;
+      const w = Math.min(crop, A.width, B.width);
+      const h = Math.min(crop, A.height, B.height);
+      const x0 = Math.max(0, Math.floor((A.width - w) / 2));
+      const y0 = Math.max(0, Math.floor((A.height - h) / 2));
+      let sumAbs = 0, sumSq = 0, maxAbs = 0, n = 0;
+      for (let yy = 0; yy < h; yy++) {
+        for (let xx = 0; xx < w; xx++) {
+          const ia = ((y0 + yy) * A.width + (x0 + xx)) * 4;
+          const ib = ((y0 + yy) * B.width + (x0 + xx)) * 4;
+          const d = Math.abs(A.data[ia] - B.data[ib]);
+          sumAbs += d;
+          sumSq += d * d;
+          if (d > maxAbs) maxAbs = d;
+          n++;
+        }
+      }
+      return {
+        crop_size_px: { width: w, height: h },
+        crop_origin_xy: { x: x0, y: y0 },
+        compared_pixels: n,
+        mean_absolute_error_gray_0_255: roundNumberForExport(sumAbs / Math.max(1, n)),
+        rmse_gray_0_255: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
+        max_absolute_error_gray_0_255: roundNumberForExport(maxAbs),
+        mean_absolute_error_normalized_0_1: roundNumberForExport((sumAbs / Math.max(1, n)) / 255.0),
+        rmse_normalized_0_1: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n)) / 255.0)
+      };
+    }
+
+    function trueForwardDeformationMatrixAtDisplayPoint(x, y) {
+      return sourceToDisplayJacobianAt(x, y);
+    }
+
+    function computeLocalFrobeniusErrors() {
+      const entries = (state.validatedAffinities || []).map((item, idx) => {
+        const Jtrue = item && item.center ? trueForwardDeformationMatrixAtDisplayPoint(item.center.x, item.center.y) : null;
+        const Jest = item ? item.M : null;
+        const diff = mat2Sub(Jest, Jtrue);
+        const abs = diff ? mat2Frobenius(diff) : null;
+        const rel = (diff && Jtrue) ? abs / (mat2Frobenius(Jtrue) + 1e-9) : null;
+        return {
+          id: idx + 1,
+          deformed_patch_center_xy: exportPoint(item.center),
+          true_local_deformation_matrix_source_to_deformed: exportMat2(Jtrue),
+          estimated_local_deformation_matrix_from_validated_affinity: exportMat2(Jest),
+          frobenius_error_absolute: roundNumberForExport(abs),
+          frobenius_error_relative: roundNumberForExport(rel)
+        };
+      });
+      const valid = entries.filter((e) => Number.isFinite(e.frobenius_error_absolute));
+      const meanAbs = valid.reduce((s, e) => s + e.frobenius_error_absolute, 0) / Math.max(1, valid.length);
+      const meanRel = valid.reduce((s, e) => s + e.frobenius_error_relative, 0) / Math.max(1, valid.length);
+      const rmseAbs = Math.sqrt(valid.reduce((s, e) => s + e.frobenius_error_absolute * e.frobenius_error_absolute, 0) / Math.max(1, valid.length));
+      return {
+        convention: "2x2 source -> deformed local Jacobian. Estimated matrix is the selected local affinity M. True matrix is the numerical Jacobian of the demo deformation at the same deformed patch center.",
+        valid_count: valid.length,
+        mean_frobenius_error_absolute: roundNumberForExport(meanAbs),
+        rmse_frobenius_error_absolute: roundNumberForExport(rmseAbs),
+        mean_frobenius_error_relative: roundNumberForExport(meanRel),
+        per_patch: entries
+      };
+    }
+
+    function trueAffineGlobalHomographySourceToDeformed() {
+      const mode = state.projectionModes[state.projectionIndex];
+      if (mode !== "Affine") return null;
+      const cx = state.size / 2;
+      const cy = state.size / 2;
+      const zRot = degToRad(state.affine.rotationDeg);
+      const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
+      const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
+      const M = [
+        [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
+        [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
+      ];
+      return [
+        [M[0][0], M[0][1], cx - M[0][0] * cx - M[0][1] * cy],
+        [M[1][0], M[1][1], cy - M[1][0] * cx - M[1][1] * cy],
+        [0, 0, 1]
+      ];
+    }
+
+    function computeGlobalFrobeniusError() {
+      if (!state.globalHomography) return null;
+      const Hrect = normalizeHomographyForExport(state.globalHomography);
+      const HdefEst = normalizeHomographyForExport(invert3x3(Hrect));
+      const HdefTrue = normalizeHomographyForExport(trueAffineGlobalHomographySourceToDeformed());
+      if (!HdefEst || !HdefTrue) {
+        return {
+          available: false,
+          reason: "A single true global 3x3 deformation matrix is exported only for Affine mode. For perspective/curved/two-plane modes, use local Frobenius errors."
+        };
+      }
+      const D = mat3Sub(HdefEst, HdefTrue);
+      const abs = mat3Frobenius(D);
+      const rel = abs / (mat3Frobenius(HdefTrue) + 1e-9);
+      return {
+        available: true,
+        convention: "3x3 source -> deformed homography, normalized by H[2][2]. Estimated deformation is inverse(estimated rectification homography).",
+        true_deformation_matrix_source_to_deformed: exportMat3(HdefTrue),
+        estimated_deformation_matrix_source_to_deformed: exportMat3(HdefEst),
+        frobenius_error_absolute: roundNumberForExport(abs),
+        frobenius_error_relative: roundNumberForExport(rel)
+      };
+    }
+
+    function makeDeformationExportPayload() {
+      if (!state.rectificationImageData) recomputeRectification();
+      const base = makeValidatedPeaksExportPayload();
+      const Hrect = normalizeHomographyForExport(state.globalHomography);
+      const HdefEst = Hrect ? normalizeHomographyForExport(invert3x3(Hrect)) : null;
+      return {
+        ...base,
+        export_version: 2,
+        export_type: "deformation_details_after_local_affinity_validation_and_rectification",
+        requested_folder_name: getDeformationFolderName(),
+        view_angles_deg: getCurrentViewAnglesDeg(),
+        projection_parameters: getProjectionParametersForExport(),
+        rectification: {
+          available: Boolean(state.rectificationImageData && state.globalHomography),
+          convention: "estimated_rectification_homography maps deformed/displayed coordinates to source/reference coordinates.",
+          estimated_rectification_homography_deformed_to_source: exportMat3(Hrect),
+          estimated_deformation_homography_source_to_deformed: exportMat3(HdefEst),
+          optimizer: state.globalHomographyInfo || null,
+          pixel_error_on_center_200x200: computePixelRectificationError200(),
+          local_frobenius_errors: computeLocalFrobeniusErrors(),
+          global_frobenius_error: computeGlobalFrobeniusError()
+        }
+      };
+    }
+
+    function makeCrc32Table() {
+      const table = new Uint32Array(256);
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c >>> 0;
+      }
+      return table;
+    }
+
+    const CRC32_TABLE = makeCrc32Table();
+
+    function crc32(bytes) {
+      let c = 0xffffffff;
+      for (let i = 0; i < bytes.length; i++) c = CRC32_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+      return (c ^ 0xffffffff) >>> 0;
+    }
+
+    function push16(arr, v) { arr.push(v & 255, (v >>> 8) & 255); }
+    function push32(arr, v) { arr.push(v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255); }
+
+    function makeZipBlob(files) {
+      const encoder = new TextEncoder();
+      const chunks = [];
+      const central = [];
+      let offset = 0;
+      for (const file of files) {
+        const nameBytes = encoder.encode(file.name);
+        const dataBytes = typeof file.content === "string" ? encoder.encode(file.content) : file.content;
+        const crc = crc32(dataBytes);
+        const local = [];
+        push32(local, 0x04034b50); push16(local, 20); push16(local, 0); push16(local, 0);
+        push16(local, 0); push16(local, 0); push32(local, crc); push32(local, dataBytes.length); push32(local, dataBytes.length);
+        push16(local, nameBytes.length); push16(local, 0);
+        chunks.push(new Uint8Array(local), nameBytes, dataBytes);
+        const centralHeader = [];
+        push32(centralHeader, 0x02014b50); push16(centralHeader, 20); push16(centralHeader, 20); push16(centralHeader, 0); push16(centralHeader, 0);
+        push16(centralHeader, 0); push16(centralHeader, 0); push32(centralHeader, crc); push32(centralHeader, dataBytes.length); push32(centralHeader, dataBytes.length);
+        push16(centralHeader, nameBytes.length); push16(centralHeader, 0); push16(centralHeader, 0); push16(centralHeader, 0); push16(centralHeader, 0); push32(centralHeader, 0); push32(centralHeader, offset);
+        central.push(new Uint8Array(centralHeader), nameBytes);
+        offset += local.length + nameBytes.length + dataBytes.length;
+      }
+      const centralOffset = offset;
+      let centralSize = 0;
+      for (const c of central) centralSize += c.length;
+      const end = [];
+      push32(end, 0x06054b50); push16(end, 0); push16(end, 0); push16(end, files.length); push16(end, files.length);
+      push32(end, centralSize); push32(end, centralOffset); push16(end, 0);
+      return new Blob([...chunks, ...central, new Uint8Array(end)], { type: "application/zip" });
+    }
+
+    function downloadBlob(filename, blob) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.setTimeout(() => URL.revokeObjectURL(url), 250);
     }
 
     function makePeakPositionExport(item) {
@@ -3824,17 +4109,40 @@
       window.setTimeout(() => URL.revokeObjectURL(url), 250);
     }
 
-    function saveValidatedPeaksDetails() {
+    function saveDeformationDetails() {
       if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage("No validated peak to save. Validate at least one affinity first.");
+        setValidationMessage("No validated affinity to save. Validate at least one local affinity first.");
         return;
       }
-      const payload = makeValidatedPeaksExportPayload();
-      const mode = payload.projection_mode || "projection";
+      if (!state.rectificationImageData) recomputeRectification();
+      if (!state.rectificationImageData || !state.globalHomography) {
+        setValidationMessage("Need at least 3 validated affinities and a successful rectification before saving deformation details.");
+        return;
+      }
+      const payload = makeDeformationExportPayload();
+      const folder = payload.requested_folder_name;
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `validated_peaks_${mode}_${payload.validated_count}_patches_${stamp}.json`;
-      downloadTextFile(filename, JSON.stringify(payload, null, 2), "application/json");
-      setValidationMessage(`Saved ${payload.validated_count} validated peak detail${payload.validated_count > 1 ? "s" : ""} to JSON`);
+      const jsonName = `${folder}/deformation_details_${stamp}.json`;
+      const readmeName = `${folder}/README.txt`;
+      const readme = [
+        "WACV interactive demo export",
+        "",
+        `Folder: ${folder}`,
+        `Projection: ${payload.projection_mode}`,
+        `Validated local affinities: ${payload.validated_count}`,
+        "",
+        "deformation_details_*.json contains:",
+        "- validated local peak/affinity details,",
+        "- estimated rectification homography,",
+        "- pixel rectification error on the center 200x200 crop,",
+        "- local Frobenius errors between the true deformation Jacobian and the validated local affinity."
+      ].join("\n");
+      const zip = makeZipBlob([
+        { name: jsonName, content: JSON.stringify(payload, null, 2) },
+        { name: readmeName, content: readme }
+      ]);
+      downloadBlob(`${folder}.zip`, zip);
+      setValidationMessage(`Saved deformation details in ${folder}.zip`);
     }
 
     // =========================================================
@@ -3985,8 +4293,8 @@
       });
     }
 
-    if (btnSavePeaksDetails) {
-      btnSavePeaksDetails.addEventListener("click", () => saveValidatedPeaksDetails());
+    if (btnSaveDeformationDetails) {
+      btnSaveDeformationDetails.addEventListener("click", () => saveDeformationDetails());
     }
 
     if (btnClearAffinities) {

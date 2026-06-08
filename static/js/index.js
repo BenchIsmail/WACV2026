@@ -111,7 +111,7 @@
 
     const controlIds = [
       "param-a-rot", "param-a-scalex", "param-a-scaley", "param-a-shearx", "param-a-sheary",
-      "param-p-tiltx", "param-p-tilty", "param-p-focal", "param-p-zrot",
+      "param-p-tiltx", "param-p-tilty", "param-p-focal",
       "param-c-curv", "param-c-drop", "param-c-zrot", "param-c-vstretch",
       "param-s-span", "param-s-camera", "param-s-neck", "param-s-shoulder", "param-s-roll", "param-s-vstretch",
       "param-r-amp", "param-r-freq", "param-r-persp", "param-r-roll", "param-r-twist", "param-r-shade",
@@ -132,7 +132,6 @@
       pTiltX: document.getElementById("val-p-tiltx"),
       pTiltY: document.getElementById("val-p-tilty"),
       pFocal: document.getElementById("val-p-focal"),
-      pZRot: document.getElementById("val-p-zrot"),
       cCurv: document.getElementById("val-c-curv"),
       cDrop: document.getElementById("val-c-drop"),
       cZRot: document.getElementById("val-c-zrot"),
@@ -173,10 +172,9 @@
         shearY: -0.18
       },
       perspective: {
-        tiltX: 0.55,
-        tiltY: -0.15,
-        focalScale: 1.25,
-        zRotationDeg: 0
+        angleViewXDeg: 30,
+        angleViewYDeg: 0,
+        focal: 1000
       },
       cylindrical: {
         curvature: 1.05,
@@ -694,10 +692,9 @@
       if (values.aShearX) values.aShearX.textContent = state.affine.shearX.toFixed(2);
       if (values.aShearY) values.aShearY.textContent = state.affine.shearY.toFixed(2);
 
-      if (values.pTiltX) values.pTiltX.textContent = state.perspective.tiltX.toFixed(2);
-      if (values.pTiltY) values.pTiltY.textContent = state.perspective.tiltY.toFixed(2);
-      if (values.pFocal) values.pFocal.textContent = state.perspective.focalScale.toFixed(2);
-      if (values.pZRot) values.pZRot.textContent = `${state.perspective.zRotationDeg}°`;
+      if (values.pTiltX) values.pTiltX.textContent = `${Math.round(state.perspective.angleViewXDeg)}°`;
+      if (values.pTiltY) values.pTiltY.textContent = `${Math.round(state.perspective.angleViewYDeg)}°`;
+      if (values.pFocal) values.pFocal.textContent = `${Math.round(state.perspective.focal)}`;
 
       if (values.cCurv) values.cCurv.textContent = state.cylindrical.curvature.toFixed(2);
       if (values.cDrop) values.cDrop.textContent = state.cylindrical.perspectiveDrop.toFixed(2);
@@ -746,10 +743,9 @@
       if (controls["param-a-shearx"]) controls["param-a-shearx"].value = String(state.affine.shearX);
       if (controls["param-a-sheary"]) controls["param-a-sheary"].value = String(state.affine.shearY);
 
-      if (controls["param-p-tiltx"]) controls["param-p-tiltx"].value = String(state.perspective.tiltX);
-      if (controls["param-p-tilty"]) controls["param-p-tilty"].value = String(state.perspective.tiltY);
-      if (controls["param-p-focal"]) controls["param-p-focal"].value = String(state.perspective.focalScale);
-      if (controls["param-p-zrot"]) controls["param-p-zrot"].value = String(state.perspective.zRotationDeg);
+      if (controls["param-p-tiltx"]) controls["param-p-tiltx"].value = String(state.perspective.angleViewXDeg);
+      if (controls["param-p-tilty"]) controls["param-p-tilty"].value = String(state.perspective.angleViewYDeg);
+      if (controls["param-p-focal"]) controls["param-p-focal"].value = String(state.perspective.focal);
 
       if (controls["param-c-curv"]) controls["param-c-curv"].value = String(state.cylindrical.curvature);
       if (controls["param-c-drop"]) controls["param-c-drop"].value = String(state.cylindrical.perspectiveDrop);
@@ -800,10 +796,9 @@
       if (controls["param-a-shearx"]) state.affine.shearX = parseFloat(controls["param-a-shearx"].value);
       if (controls["param-a-sheary"]) state.affine.shearY = parseFloat(controls["param-a-sheary"].value);
 
-      if (controls["param-p-tiltx"]) state.perspective.tiltX = parseFloat(controls["param-p-tiltx"].value);
-      if (controls["param-p-tilty"]) state.perspective.tiltY = parseFloat(controls["param-p-tilty"].value);
-      if (controls["param-p-focal"]) state.perspective.focalScale = parseFloat(controls["param-p-focal"].value);
-      if (controls["param-p-zrot"]) state.perspective.zRotationDeg = parseInt(controls["param-p-zrot"].value, 10);
+      if (controls["param-p-tiltx"]) state.perspective.angleViewXDeg = parseFloat(controls["param-p-tiltx"].value);
+      if (controls["param-p-tilty"]) state.perspective.angleViewYDeg = parseFloat(controls["param-p-tilty"].value);
+      if (controls["param-p-focal"]) state.perspective.focal = parseFloat(controls["param-p-focal"].value);
 
       if (controls["param-c-curv"]) state.cylindrical.curvature = parseFloat(controls["param-c-curv"].value);
       if (controls["param-c-drop"]) state.cylindrical.perspectiveDrop = parseFloat(controls["param-c-drop"].value);
@@ -1002,32 +997,128 @@
       return octx.getImageData(0, 0, outCanvas.width, outCanvas.height);
     }
 
+    function solveLinearSystem(A, b) {
+      const n = A.length;
+      const M = A.map((row, i) => row.slice().concat([b[i]]));
+      for (let col = 0; col < n; col++) {
+        let pivot = col;
+        for (let r = col + 1; r < n; r++) {
+          if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+        }
+        if (Math.abs(M[pivot][col]) < 1e-12 || !Number.isFinite(M[pivot][col])) return null;
+        if (pivot !== col) {
+          const tmp = M[pivot];
+          M[pivot] = M[col];
+          M[col] = tmp;
+        }
+        const piv = M[col][col];
+        for (let c = col; c <= n; c++) M[col][c] /= piv;
+        for (let r = 0; r < n; r++) {
+          if (r === col) continue;
+          const f = M[r][col];
+          if (f === 0) continue;
+          for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+        }
+      }
+      return M.map((row) => row[n]);
+    }
+
+    function homographyFromFourPointPairs(srcPts, dstPts) {
+      if (!srcPts || !dstPts || srcPts.length !== 4 || dstPts.length !== 4) return null;
+      const A = [];
+      const b = [];
+      for (let i = 0; i < 4; i++) {
+        const x = srcPts[i][0], y = srcPts[i][1];
+        const u = dstPts[i][0], v = dstPts[i][1];
+        A.push([x, y, 1, 0, 0, 0, -u * x, -u * y]);
+        b.push(u);
+        A.push([0, 0, 0, x, y, 1, -v * x, -v * y]);
+        b.push(v);
+      }
+      const h = solveLinearSystem(A, b);
+      if (!h) return null;
+      return [
+        [h[0], h[1], h[2]],
+        [h[3], h[4], h[5]],
+        [h[6], h[7], 1.0]
+      ];
+    }
+
+    function buildPerspectiveHomography(width, height) {
+      const angleVueX = degToRad(state.perspective.angleViewXDeg || 0);
+      const angleVueY = degToRad(state.perspective.angleViewYDeg || 0);
+      const focal = Math.max(1e-6, Number(state.perspective.focal) || 1000);
+      const zOffset = 2.0;
+
+      const points3D = [
+        [-1.0, -1.0, 0.0],
+        [ 1.0, -1.0, 0.0],
+        [-1.0,  1.0, 0.0],
+        [ 1.0,  1.0, 0.0]
+      ];
+
+      const cx = Math.cos(angleVueX), sx = Math.sin(angleVueX);
+      const cy = Math.cos(angleVueY), sy = Math.sin(angleVueY);
+
+      const Rx = [
+        [1, 0, 0],
+        [0, cx, -sx],
+        [0, sx, cx]
+      ];
+      const Ry = [
+        [cy, 0, sy],
+        [0, 1, 0],
+        [-sy, 0, cy]
+      ];
+      const R = mat3Mul(Rx, Ry);
+
+      const projected = points3D.map((pt) => {
+        const q = mat3MulVec(R, [pt[0], pt[1], pt[2]]);
+        const denom = q[2] + zOffset;
+        return [q[0] * focal / denom, q[1] * focal / denom];
+      });
+
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      projected.forEach((p) => {
+        minX = Math.min(minX, p[0]);
+        maxX = Math.max(maxX, p[0]);
+        minY = Math.min(minY, p[1]);
+        maxY = Math.max(maxY, p[1]);
+      });
+
+      const spanX = Math.max(1e-9, maxX - minX);
+      const spanY = Math.max(1e-9, maxY - minY);
+      const scale = Math.min(width / spanX, height / spanY);
+      const offsetX = (width - scale * spanX) / 2 - scale * minX;
+      const offsetY = (height - scale * spanY) / 2 - scale * minY;
+
+      const dstPts = projected.map((p) => [p[0] * scale + offsetX, p[1] * scale + offsetY]);
+      const srcPts = [
+        [0, 0],
+        [width, 0],
+        [0, height],
+        [width, height]
+      ];
+
+      const H = homographyFromFourPointPairs(srcPts, dstPts);
+      const Hinv = H ? invert3x3(H) : null;
+      return { H, Hinv, srcPts, dstPts, zOffset, focal };
+    }
+
     function applyPerspectiveProjection(imageData) {
       const w = imageData.width;
       const h = imageData.height;
       const out = new ImageData(w, h);
       const dst = out.data;
-      const cx = w / 2;
-      const cy = h / 2;
-      const tiltX = state.perspective.tiltX;
-      const tiltY = state.perspective.tiltY;
-      const focalScale = Math.max(0.05, state.perspective.focalScale);
-      const zRot = degToRad(state.perspective.zRotationDeg);
+      const grayBorder = Math.round(computeMeanGray(imageData));
+      const hom = buildPerspectiveHomography(w, h);
+      const Hinv = hom.Hinv;
+      if (!Hinv) return imageData;
       for (let y = 0; y < h; y++) {
         for (let x = 0; x < w; x++) {
-          const xn = (x - cx) / cx;
-          const yn = (y - cy) / cy;
-          const p = rotate2D(xn, yn, -zRot);
-          const xr = p.x;
-          const yr = p.y;
-          const denomX = 1 + tiltX * yr;
-          const denomY = 1 + tiltY * xr;
-          const srcXn = (xr / focalScale) / denomX;
-          const srcYn = (yr / focalScale) / denomY;
-          const sx = srcXn * cx + cx;
-          const sy = srcYn * cy + cy;
+          const src = applyHomographyPoint(Hinv, [x, y]);
           const di = (y * w + x) * 4;
-          const gray = sampleGrayBilinear(imageData, sx, sy, 255);
+          const gray = sampleGrayBilinear(imageData, src[0], src[1], grayBorder);
           setGrayPixel(dst, di, gray);
         }
       }
@@ -3056,23 +3147,10 @@
     }
 
     function mapDisplayToSourcePerspective(x, y) {
-      const w = state.size;
-      const h = state.size;
-      const cx = w / 2;
-      const cy = h / 2;
-      const tiltX = state.perspective.tiltX;
-      const tiltY = state.perspective.tiltY;
-      const focalScale = Math.max(0.05, state.perspective.focalScale);
-      const zRot = degToRad(state.perspective.zRotationDeg);
-      const xn = (x - cx) / cx;
-      const yn = (y - cy) / cy;
-      const p = rotate2D(xn, yn, -zRot);
-      const xr = p.x;
-      const yr = p.y;
-      const denomX = 1 + tiltX * yr;
-      const denomY = 1 + tiltY * xr;
-      if (Math.abs(denomX) < 1e-9 || Math.abs(denomY) < 1e-9) return null;
-      return { x: ((xr / focalScale) / denomX) * cx + cx, y: ((yr / focalScale) / denomY) * cy + cy };
+      const hom = buildPerspectiveHomography(state.size, state.size);
+      if (!hom || !hom.Hinv) return null;
+      const p = applyHomographyPoint(hom.Hinv, [x, y]);
+      return { x: p[0], y: p[1] };
     }
 
     function mapDisplayToSourceCylindrical(x, y) {
@@ -3682,14 +3760,10 @@
 
     function exportMat3(M, digits = 6) {
       if (!M || !M[0] || !M[1] || !M[2]) return null;
-      return [
-        [roundNumberForExport(Number(M[0][0]), digits), roundNumberForExport(Number(M[0][1]), digits), roundNumberForExport(Number(M[0][2]), digits)],
-        [roundNumberForExport(Number(M[1][0]), digits), roundNumberForExport(Number(M[1][1]), digits), roundNumberForExport(Number(M[1][2]), digits)],
-        [roundNumberForExport(Number(M[2][0]), digits), roundNumberForExport(Number(M[2][1]), digits), roundNumberForExport(Number(M[2][2]), digits)]
-      ];
+      return [exportVec2(M[0], digits), exportVec2(M[1], digits), exportVec2(M[2], digits)];
     }
 
-    function exportSafeNumber(value, digits = 4) {
+    function exportSafeNumber(value, digits = 6) {
       const n = Number(value);
       if (!Number.isFinite(n)) return null;
       return roundNumberForExport(n, digits);
@@ -3697,23 +3771,17 @@
 
     function filenameSafeNumber(value, digits = 3) {
       const n = Number(value);
-      if (!Number.isFinite(n)) return "na";
-      return n.toFixed(digits).replace("-", "m").replace(".", "p");
+      if (!Number.isFinite(n)) return 'na';
+      return n.toFixed(digits).replace('-', 'm').replace('.', 'p');
     }
 
     function sanitizeFilenamePart(str) {
-      return String(str || "")
-        .trim()
-        .replace(/\s+/g, "_")
-        .replace(/[^a-zA-Z0-9_\-]/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "") || "value";
+      return String(str).trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_');
     }
 
     function getCurrentDeformationParameters() {
-      const mode = state.projectionModes[state.projectionIndex] || "Unknown";
-
-      if (mode === "Affine") {
+      const mode = state.projectionModes[state.projectionIndex] || 'Unknown';
+      if (mode === 'Affine') {
         return {
           mode,
           parameters: {
@@ -3725,22 +3793,17 @@
           }
         };
       }
-
-      if (mode === "Perspective") {
+      if (mode === 'Perspective') {
         return {
           mode,
           parameters: {
-            angle_vue_x_tilt_parameter: exportSafeNumber(state.perspective.tiltX),
-            angle_vue_y_tilt_parameter: exportSafeNumber(state.perspective.tiltY),
-            angle_vue_x_deg_atan_tilt: exportSafeNumber(radToDeg(Math.atan(Number(state.perspective.tiltX) || 0))),
-            angle_vue_y_deg_atan_tilt: exportSafeNumber(radToDeg(Math.atan(Number(state.perspective.tiltY) || 0))),
-            focal_scale: exportSafeNumber(state.perspective.focalScale),
-            rotation_z_deg: exportSafeNumber(state.perspective.zRotationDeg)
+            angle_vue_x_deg: exportSafeNumber(state.perspective.angleViewXDeg),
+            angle_vue_y_deg: exportSafeNumber(state.perspective.angleViewYDeg),
+            focal: exportSafeNumber(state.perspective.focal)
           }
         };
       }
-
-      if (mode === "Cylindrical") {
+      if (mode === 'Cylindrical') {
         return {
           mode,
           parameters: {
@@ -3751,8 +3814,7 @@
           }
         };
       }
-
-      if (mode === "Shoulder") {
+      if (mode === 'Shoulder') {
         return {
           mode,
           parameters: {
@@ -3765,8 +3827,7 @@
           }
         };
       }
-
-      if (mode === "Crumpled") {
+      if (mode === 'Crumpled') {
         return {
           mode,
           parameters: {
@@ -3779,8 +3840,7 @@
           }
         };
       }
-
-      if (mode === "Two Planes") {
+      if (mode === 'Two Planes') {
         return {
           mode,
           parameters: {
@@ -3793,27 +3853,43 @@
           }
         };
       }
-
       return { mode, parameters: {} };
     }
 
     function buildDeformationFilenameBase() {
       const deform = getCurrentDeformationParameters();
-      const parts = ["deformation", sanitizeFilenamePart(deform.mode).toLowerCase()];
+      const parts = ['deformation', sanitizeFilenamePart(deform.mode).toLowerCase()];
       Object.entries(deform.parameters || {}).forEach(([key, value]) => {
         if (value === null || value === undefined) return;
         parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
       });
-      return parts.join("__");
+      return parts.join('__');
     }
 
-    function frobeniusError2x2(A, B) {
-      if (!A || !B || !A[0] || !A[1] || !B[0] || !B[1]) return null;
+    function normalizeHomography3x3(H) {
+      if (!H) return null;
+      const h33 = Number(H[2] && H[2][2]);
+      if (Number.isFinite(h33) && Math.abs(h33) > 1e-12) {
+        return H.map((row) => row.map((v) => v / h33));
+      }
+      let norm = 0.0;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) norm += Number(H[r][c]) * Number(H[r][c]);
+      }
+      norm = Math.sqrt(norm);
+      if (!Number.isFinite(norm) || norm < 1e-12) return H;
+      return H.map((row) => row.map((v) => v / norm));
+    }
+
+    function frobeniusError3x3(A, B) {
+      if (!A || !B) return null;
+      const A1 = normalizeHomography3x3(A);
+      const B1 = normalizeHomography3x3(B);
       let s = 0.0;
-      for (let r = 0; r < 2; r++) {
-        for (let c = 0; c < 2; c++) {
-          const a = Number(A[r][c]);
-          const b = Number(B[r][c]);
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          const a = Number(A1[r][c]);
+          const b = Number(B1[r][c]);
           if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
           const d = a - b;
           s += d * d;
@@ -3822,23 +3898,12 @@
       return Math.sqrt(s);
     }
 
-    function summarizeNumericErrors(values) {
-      const arr = (values || []).filter((v) => Number.isFinite(v));
-      if (!arr.length) return null;
-      let sum = 0.0, sum2 = 0.0, mn = Infinity, mx = -Infinity;
-      arr.forEach((v) => {
-        sum += v;
-        sum2 += v * v;
-        mn = Math.min(mn, v);
-        mx = Math.max(mx, v);
-      });
-      return {
-        count: arr.length,
-        mean: roundNumberForExport(sum / arr.length),
-        rmse: roundNumberForExport(Math.sqrt(sum2 / arr.length)),
-        min: roundNumberForExport(mn),
-        max: roundNumberForExport(mx)
-      };
+    function computeMeanGray(imageData) {
+      if (!imageData || !imageData.data || !imageData.data.length) return 255;
+      let s = 0.0;
+      const n = imageData.width * imageData.height;
+      for (let i = 0; i < imageData.data.length; i += 4) s += imageData.data[i];
+      return s / Math.max(1, n);
     }
 
     function computePixelRectificationError200x200() {
@@ -3846,12 +3911,10 @@
       const src = state.sourceImageData;
       const rec = state.rectificationImageData;
       if (src.width !== rec.width || src.height !== rec.height) return null;
-
       const crop = Math.min(200, src.width, src.height);
       const x0 = Math.floor((src.width - crop) / 2);
       const y0 = Math.floor((src.height - crop) / 2);
       let n = 0, sumAbs = 0.0, sumSq = 0.0, maxAbs = 0.0;
-
       for (let y = y0; y < y0 + crop; y++) {
         for (let x = x0; x < x0 + crop; x++) {
           const k = (y * src.width + x) * 4;
@@ -3863,7 +3926,6 @@
           n++;
         }
       }
-
       return {
         crop_size_px: crop,
         crop_origin_xy: { x: x0, y: y0 },
@@ -3871,63 +3933,51 @@
         mae_gray_level: roundNumberForExport(sumAbs / Math.max(1, n)),
         rmse_gray_level: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
         max_abs_gray_level: roundNumberForExport(maxAbs),
-        convention: "central 200x200 crop, grayscale error between rectified image and original source texture"
+        convention: 'central 200x200 crop, grayscale error between rectified image and original source texture'
       };
     }
 
-    function trueForwardDeformationMatrixAt(x, y) {
-      try {
-        const Jrect = numericalJacobianDisplayToSource(x, y);
-        if (!Jrect) return null;
-        return mat2Inv(Jrect);
-      } catch (e) {
-        return null;
+    function computeTrueDeformationHomographySourceToDisplayed() {
+      const mode = state.projectionModes[state.projectionIndex];
+      const w = state.size;
+      const h = state.size;
+      if (mode === 'Affine') {
+        const cx = w / 2;
+        const cy = h / 2;
+        const zRot = degToRad(state.affine.rotationDeg);
+        const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
+        const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
+        const M = [
+          [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
+          [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
+        ];
+        return [
+          [M[0][0], M[0][1], cx - (M[0][0] * cx + M[0][1] * cy)],
+          [M[1][0], M[1][1], cy - (M[1][0] * cx + M[1][1] * cy)],
+          [0.0, 0.0, 1.0]
+        ];
       }
-    }
-
-    function estimatedForwardMatrixFromGlobalHomographyAt(x, y) {
-      if (!state.globalHomography) return null;
-      try {
-        const JrectEstimated = jacobianHomographyAtInput(state.globalHomography, x, y);
-        return mat2Inv(JrectEstimated);
-      } catch (e) {
-        return null;
+      if (mode === 'Perspective') {
+        const hom = buildPerspectiveHomography(w, h);
+        return hom ? hom.H : null;
       }
+      return null;
     }
 
-    function computeLocalFrobeniusErrors() {
-      return (state.validatedAffinities || []).map((item, idx) => {
-        const cx = item.center && Number.isFinite(item.center.x) ? item.center.x : state.size / 2;
-        const cy = item.center && Number.isFinite(item.center.y) ? item.center.y : state.size / 2;
-        const trueForward = trueForwardDeformationMatrixAt(cx, cy);
-        const estimatedLocal = item.M || null;
-        const estimatedGlobal = estimatedForwardMatrixFromGlobalHomographyAt(cx, cy);
-        const eLocal = frobeniusError2x2(trueForward, estimatedLocal);
-        const eGlobal = frobeniusError2x2(trueForward, estimatedGlobal);
-
-        return {
-          id: idx + 1,
-          center_xy_deformed_image: exportPoint({ x: cx, y: cy }),
-          true_forward_deformation_matrix_source_to_deformed: exportMat2(trueForward),
-          estimated_forward_matrix_from_validated_local_affinity: exportMat2(estimatedLocal),
-          estimated_forward_matrix_from_global_rectification: exportMat2(estimatedGlobal),
-          frobenius_true_vs_validated_local_affinity: roundNumberForExport(eLocal),
-          frobenius_true_vs_global_rectification: roundNumberForExport(eGlobal)
-        };
-      });
+    function computeEstimatedDeformationHomographySourceToDisplayed() {
+      return state.globalHomography ? invert3x3(state.globalHomography) : null;
     }
 
-    function computeGlobalFrobeniusAtCenter() {
-      const cx = state.size / 2;
-      const cy = state.size / 2;
-      const trueForward = trueForwardDeformationMatrixAt(cx, cy);
-      const estimatedForward = estimatedForwardMatrixFromGlobalHomographyAt(cx, cy);
+    function computeGlobalHomographyComparison() {
+      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
+      const Hrect = state.globalHomography || null;
+      const Hest = computeEstimatedDeformationHomographySourceToDisplayed();
       return {
-        evaluation_point_xy: [roundNumberForExport(cx), roundNumberForExport(cy)],
-        true_forward_deformation_matrix_source_to_deformed: exportMat2(trueForward),
-        estimated_forward_matrix_from_global_rectification: exportMat2(estimatedForward),
-        frobenius_error_at_center: roundNumberForExport(frobeniusError2x2(trueForward, estimatedForward)),
-        note: "For non-affine deformations, this is evaluated at the image center because the true Jacobian varies spatially."
+        true_deformation_homography_source_to_deformed: exportMat3(Htrue),
+        estimated_rectifying_homography_deformed_to_source: exportMat3(Hrect),
+        estimated_deformation_homography_source_to_deformed: exportMat3(Hest),
+        frobenius_error_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusError3x3(Htrue, Hest)),
+        note: Htrue && Hest ? 'Frobenius norm computed after homography normalization by H[2][2].' : 'Global homography comparison available only when both true and estimated homographies exist.'
       };
     }
 
@@ -4004,10 +4054,9 @@
       const V = refs.V;
       const W = [U[0] - V[0], U[1] - V[1]];
       const deform = getCurrentDeformationParameters();
-      const localFrobeniusErrors = computeLocalFrobeniusErrors();
 
       return {
-        export_version: 2,
+        export_version: 3,
         created_at: new Date().toISOString(),
         image_size_px: {
           width: state.size,
@@ -4017,13 +4066,13 @@
         deformation_parameters: deform.parameters,
         texture_parameters: {
           black_occupancy: state.texture.occupancy,
-          dilation_radius: state.texture.dilationSize,
+          dilation_radius: state.texture.dilation,
           shift_angle_deg: state.texture.angleShiftDeg,
           shift_norm_px: state.texture.normShift,
           gaussian_blur_sigma: state.texture.blurSigma
         },
         original_shifts_source_px: {
-          convention: "xy, in the undeformed/source texture",
+          convention: 'xy, in the undeformed/source texture',
           U: exportVec2(U),
           V: exportVec2(V),
           W_U_minus_V: exportVec2(W),
@@ -4032,19 +4081,12 @@
           minus_W: exportVec2([-W[0], -W[1]])
         },
         rectification_details: {
+          validated_affinities_count: state.validatedAffinities.length,
           rectification_enabled: Boolean(state.rectificationEnabled),
           has_rectification_image: Boolean(state.rectificationImageData),
-          estimated_rectifying_homography_deformed_to_source: exportMat3(state.globalHomography),
-          rectification_solver_info: state.globalHomographyInfo || null,
           pixel_rectification_error_200x200: computePixelRectificationError200x200(),
-          global_frobenius_error_at_center: computeGlobalFrobeniusAtCenter(),
-          local_frobenius_errors: localFrobeniusErrors,
-          local_frobenius_summary_true_vs_validated_local_affinity: summarizeNumericErrors(
-            localFrobeniusErrors.map((e) => e.frobenius_true_vs_validated_local_affinity)
-          ),
-          local_frobenius_summary_true_vs_global_rectification: summarizeNumericErrors(
-            localFrobeniusErrors.map((e) => e.frobenius_true_vs_global_rectification)
-          )
+          global_homography_comparison: computeGlobalHomographyComparison(),
+          rectification_solver_info: state.globalHomographyInfo || null
         },
         validated_count: state.validatedAffinities.length,
         validated_patches: state.validatedAffinities.map((item, idx) => ({
@@ -4081,39 +4123,14 @@
       };
     }
 
-    function downloadTextFile(filename, text, mimeType = "application/json") {
+    function downloadTextFile(filename, text, mimeType = 'application/json') {
       const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
+      const a = document.createElement('a');
       a.href = url;
       a.download = filename;
+      a.style.display = 'none';
       document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.setTimeout(() => URL.revokeObjectURL(url), 250);
-    }
-
-    function saveValidatedPeaksDetails() {
-      if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage("No validated deformation to save. Validate at least one affinity first.");
-        return;
-      }
-
-      const payload = makeValidatedPeaksExportPayload();
-      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const baseName = buildDeformationFilenameBase();
-      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
-      const jsonText = JSON.stringify(payload, null, 2);
-
-      // Robust browser download, including Safari.
-      const blob = new Blob([jsonText], { type: "application/json;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      a.style.display = "none";
-      document.body.appendChild(a);
-
       window.setTimeout(() => {
         a.click();
         window.setTimeout(() => {
@@ -4121,8 +4138,19 @@
           if (a.parentNode) a.parentNode.removeChild(a);
         }, 500);
       }, 0);
+    }
 
-      setValidationMessage(`Saved ${payload.validated_count} deformation detail${payload.validated_count > 1 ? "s" : ""} to ${filename}`);
+    function saveValidatedPeaksDetails() {
+      if (!state.validatedAffinities || !state.validatedAffinities.length) {
+        setValidationMessage('No validated peak to save. Validate at least one affinity first.');
+        return;
+      }
+      const payload = makeValidatedPeaksExportPayload();
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const baseName = buildDeformationFilenameBase();
+      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
+      downloadTextFile(filename, JSON.stringify(payload, null, 2), 'application/json');
+      setValidationMessage(`Download started: ${filename}`);
     }
 
     // =========================================================
@@ -4438,7 +4466,7 @@
         [values.aScaleY, controls["param-a-scaley"]], [values.aShearX, controls["param-a-shearx"]],
         [values.aShearY, controls["param-a-sheary"]], [values.pTiltX, controls["param-p-tiltx"]],
         [values.pTiltY, controls["param-p-tilty"]], [values.pFocal, controls["param-p-focal"]],
-        [values.pZRot, controls["param-p-zrot"]], [values.cCurv, controls["param-c-curv"]],
+        [values.cCurv, controls["param-c-curv"]],
         [values.cDrop, controls["param-c-drop"]], [values.cZRot, controls["param-c-zrot"]],
         [values.cVStretch, controls["param-c-vstretch"]], [values.sSpan, controls["param-s-span"]],
         [values.sCamera, controls["param-s-camera"]], [values.sNeck, controls["param-s-neck"]],

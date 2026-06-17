@@ -52,6 +52,16 @@
 
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
 
+    const btnSyntheticTests = document.getElementById("btn-synthetic-tests");
+    const btnRealTests = document.getElementById("btn-real-tests");
+    const realUploadPanel = document.getElementById("real-upload-panel");
+    const dropReferenceImage = document.getElementById("drop-reference-image");
+    const dropDeformedImage = document.getElementById("drop-deformed-image");
+    const inputReferenceImage = document.getElementById("input-reference-image");
+    const inputDeformedImage = document.getElementById("input-deformed-image");
+    const referenceUploadStatus = document.getElementById("reference-upload-status");
+    const deformedUploadStatus = document.getElementById("deformed-upload-status");
+
     const acorrPreview = document.getElementById("acorr-preview");
     const acorrCanvas = document.getElementById("acorr-canvas");
     const acorrCtx = acorrCanvas
@@ -216,6 +226,9 @@
       displayedCtx: null,
       sourceImageData: null,
       displayedImageData: null,
+      testMode: "synthetic",
+      realReferenceImageData: null,
+      realDeformedImageData: null,
       patchSize: 90,
       previewContrast: 2.2,
       autocorrEnabled: false,
@@ -615,6 +628,175 @@
       ctx2.strokeText(text, x, y);
       ctx2.fillText(text, x, y);
       ctx2.restore();
+    }
+
+
+    // =========================================================
+    // TEST MODE + REAL IMAGE UPLOADS
+    // =========================================================
+    function resetGeometryResults(message = "Ready") {
+      state.lastDetection = null;
+      state.lastAffinityEstimate = null;
+      state.validatedAffinities = [];
+      state.rectificationEnabled = false;
+      state.differenceEnabled = false;
+      state.patchViewEnabled = false;
+      state.rectificationImageData = null;
+      state.differenceImageData = null;
+      state.rectificationTransform = null;
+      state.globalHomography = null;
+      state.globalHomographyInfo = null;
+      state.triangulationEnabled = false;
+      state.triangulationData = null;
+      state.lockedPatch = false;
+      setValidationMessage(message);
+      refreshRectificationUI();
+      renderValidatedPatchesPanel();
+    }
+
+    function updateTestModeUI() {
+      const isReal = state.testMode === "real";
+      document.body.classList.toggle("real-tests-mode", isReal);
+      if (realUploadPanel) realUploadPanel.classList.toggle("is-active", isReal);
+      if (btnSyntheticTests) {
+        btnSyntheticTests.classList.toggle("is-active", !isReal);
+        btnSyntheticTests.classList.toggle("is-dark", !isReal);
+        btnSyntheticTests.classList.toggle("is-light", isReal);
+      }
+      if (btnRealTests) {
+        btnRealTests.classList.toggle("is-active", isReal);
+        btnRealTests.classList.toggle("is-dark", isReal);
+        btnRealTests.classList.toggle("is-light", !isReal);
+      }
+      if (projectionModeLabel) projectionModeLabel.textContent = isReal ? "Real image" : state.projectionModes[state.projectionIndex];
+    }
+
+    function setTestMode(mode) {
+      const nextMode = mode === "real" ? "real" : "synthetic";
+      if (state.testMode === nextMode) return;
+      state.testMode = nextMode;
+      resetGeometryResults(nextMode === "real" ? "Load the reference and deformed images" : "Ready");
+      updateTestModeUI();
+
+      if (nextMode === "synthetic") {
+        applyCurrentProjection();
+      } else {
+        if (state.realReferenceImageData) {
+          state.sourceImageData = state.realReferenceImageData;
+          state.sourceCtx.putImageData(state.sourceImageData, 0, 0);
+        }
+        if (state.realDeformedImageData) {
+          state.displayedImageData = state.realDeformedImageData;
+          state.displayedCtx.putImageData(state.displayedImageData, 0, 0);
+        }
+        redrawMainCanvas();
+      }
+    }
+
+    function imageFileToSquareImageData(file) {
+      return new Promise((resolve, reject) => {
+        if (!file || !file.type || !file.type.startsWith("image/")) {
+          reject(new Error("Please choose an image file."));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Could not read this file."));
+        reader.onload = () => {
+          const img = new Image();
+          img.onerror = () => reject(new Error("Could not decode this image."));
+          img.onload = () => {
+            const c = document.createElement("canvas");
+            c.width = state.size;
+            c.height = state.size;
+            const cctx = c.getContext("2d", { willReadFrequently: true });
+            cctx.fillStyle = "white";
+            cctx.fillRect(0, 0, c.width, c.height);
+
+            const scale = Math.min(c.width / img.width, c.height / img.height);
+            const dw = Math.max(1, Math.round(img.width * scale));
+            const dh = Math.max(1, Math.round(img.height * scale));
+            const dx = Math.round((c.width - dw) / 2);
+            const dy = Math.round((c.height - dh) / 2);
+            cctx.imageSmoothingEnabled = true;
+            cctx.imageSmoothingQuality = "high";
+            cctx.drawImage(img, dx, dy, dw, dh);
+
+            const rgba = cctx.getImageData(0, 0, c.width, c.height);
+            const data = rgba.data;
+            for (let i = 0; i < data.length; i += 4) {
+              const gray = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+              data[i] = gray;
+              data[i + 1] = gray;
+              data[i + 2] = gray;
+              data[i + 3] = 255;
+            }
+            resolve(rgba);
+          };
+          img.src = String(reader.result || "");
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    async function loadRealImage(file, role) {
+      try {
+        const imgData = await imageFileToSquareImageData(file);
+        resetGeometryResults("Real image loaded. Continue with autocorrelation and peak detection.");
+        state.sourceGrayCache = null;
+        state.sourcePhaseReferenceCache = null;
+
+        if (role === "reference") {
+          state.realReferenceImageData = imgData;
+          state.sourceImageData = imgData;
+          state.sourceCtx.putImageData(imgData, 0, 0);
+          if (referenceUploadStatus) referenceUploadStatus.textContent = `${file.name} loaded`;
+        } else {
+          state.realDeformedImageData = imgData;
+          state.displayedImageData = imgData;
+          state.displayedCtx.putImageData(imgData, 0, 0);
+          if (deformedUploadStatus) deformedUploadStatus.textContent = `${file.name} loaded`;
+        }
+
+        state.testMode = "real";
+        updateTestModeUI();
+        if (state.autocorrEnabled) {
+          const p = getActivePatchCenter();
+          renderAutocorrelationAt(p.x, p.y);
+        }
+        redrawMainCanvas();
+      } catch (err) {
+        setValidationMessage(err && err.message ? err.message : "Image loading failed");
+      }
+    }
+
+    function setupDropzone(dropzone, input, role) {
+      if (!dropzone || !input) return;
+
+      input.addEventListener("change", () => {
+        const file = input.files && input.files[0];
+        if (file) loadRealImage(file, role);
+      });
+
+      ["dragenter", "dragover"].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropzone.classList.add("is-dragover");
+        });
+      });
+
+      ["dragleave", "drop"].forEach((eventName) => {
+        dropzone.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dropzone.classList.remove("is-dragover");
+        });
+      });
+
+      dropzone.addEventListener("drop", (event) => {
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (file) loadRealImage(file, role);
+      });
     }
 
     // =========================================================
@@ -4201,6 +4383,8 @@
     // PARAMETER ACTIONS
     // =========================================================
     function resetAllParams() {
+      state.testMode = "synthetic";
+      updateTestModeUI();
       state.texture = { ...DEFAULTS.texture };
       state.affine = { ...DEFAULTS.affine };
       state.perspective = { ...DEFAULTS.perspective };
@@ -4256,8 +4440,14 @@
     // =========================================================
     // EVENTS
     // =========================================================
+    if (btnSyntheticTests) btnSyntheticTests.addEventListener("click", () => setTestMode("synthetic"));
+    if (btnRealTests) btnRealTests.addEventListener("click", () => setTestMode("real"));
+    setupDropzone(dropReferenceImage, inputReferenceImage, "reference");
+    setupDropzone(dropDeformedImage, inputDeformedImage, "deformed");
+
     if (btnGenerate) {
       btnGenerate.addEventListener("click", () => {
+        setTestMode("synthetic");
         clearValidatedAffinities();
         updateStateFromControls();
         renderGeneratedTexture();
@@ -4266,6 +4456,7 @@
 
     if (btnProjection) {
       btnProjection.addEventListener("click", () => {
+        setTestMode("synthetic");
         clearValidatedAffinities();
         cycleProjectionMode();
       });
@@ -4375,6 +4566,7 @@
     [texOccupancy, texDilation, texAngle, texShift, texBlur].forEach((el) => {
       if (!el) return;
       el.addEventListener("input", () => {
+        if (state.testMode !== "synthetic") return;
         clearValidatedAffinities();
         updateStateFromControls();
         renderGeneratedTexture();
@@ -4384,6 +4576,7 @@
     controlIds.forEach((id) => {
       if (!controls[id]) return;
       controls[id].addEventListener("input", () => {
+        if (state.testMode !== "synthetic") return;
         clearValidatedAffinities();
         updateStateFromControls();
         applyCurrentProjection();
@@ -4565,6 +4758,7 @@
     syncControlsFromState();
     enableEditableSliderValues();
     refreshPeakStateUI();
+    updateTestModeUI();
     renderGeneratedTexture();
   });
 })();

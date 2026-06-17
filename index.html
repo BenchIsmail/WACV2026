@@ -540,6 +540,117 @@
       }
     }
 
+
+
+    .test-mode-switch {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+    }
+
+    .test-mode-switch .button.is-active {
+      box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.20);
+    }
+
+    .real-upload-panel {
+      display: none;
+      margin-bottom: 1rem;
+      padding: 1rem;
+      border-radius: 16px;
+      border: 1px dashed rgba(37, 99, 235, 0.35);
+      background: #f8fbff;
+    }
+
+    .real-upload-panel.is-active {
+      display: block;
+    }
+
+    .real-upload-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 1rem;
+    }
+
+    .real-dropzone {
+      position: relative;
+      min-height: 150px;
+      border: 2px dashed rgba(15, 23, 42, 0.18);
+      border-radius: 16px;
+      background: white;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+    }
+
+    .real-dropzone:hover,
+    .real-dropzone.is-dragover {
+      border-color: #2563eb;
+      background: #eff6ff;
+      transform: translateY(-1px);
+    }
+
+    .real-dropzone input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+
+    .real-dropzone-title {
+      font-weight: 800;
+      color: #0f172a;
+      margin-bottom: 0.35rem;
+    }
+
+    .real-dropzone-hint {
+      font-size: 0.86rem;
+      color: #475569;
+      line-height: 1.45;
+    }
+
+    .real-upload-status {
+      margin-top: 0.55rem;
+      font-size: 0.8rem;
+      color: #1d4ed8;
+      font-weight: 700;
+    }
+
+    .real-mode-note {
+      margin-top: 0.8rem;
+      text-align: center;
+      color: #475569;
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+
+    body.real-tests-mode .synthetic-only {
+      display: none !important;
+    }
+
+    body.real-tests-mode .interactive-workspace {
+      grid-template-columns: minmax(520px, 1fr);
+      justify-content: center;
+    }
+
+    body.real-tests-mode .interactive-center {
+      max-width: 980px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+
+    @media screen and (max-width: 900px) {
+      .real-upload-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
     .patch-view-panel {
       display: none;
       width: 100%;
@@ -716,13 +827,47 @@
         <h2 class="title is-3 has-text-centered">Interactive Test Zone</h2>
 
         <div class="interactive-box">
+          <div class="test-mode-switch" role="tablist" aria-label="Interactive test mode">
+            <button id="btn-synthetic-tests" class="button is-dark is-rounded is-active" type="button">
+              <span class="icon"><i class="fas fa-flask"></i></span>
+              <span>Tests with synthetic textures</span>
+            </button>
+            <button id="btn-real-tests" class="button is-light is-rounded" type="button">
+              <span class="icon"><i class="fas fa-image"></i></span>
+              <span>Real rectification tests</span>
+            </button>
+          </div>
+
+          <div id="real-upload-panel" class="real-upload-panel" aria-live="polite">
+            <div class="real-upload-grid">
+              <label id="drop-reference-image" class="real-dropzone">
+                <input id="input-reference-image" type="file" accept="image/*">
+                <span class="icon is-large"><i class="fas fa-file-image"></i></span>
+                <span class="real-dropzone-title">Reference image</span>
+                <span class="real-dropzone-hint">Drop the fronto-parallel/reference texture here, or click to choose an image.</span>
+                <span id="reference-upload-status" class="real-upload-status">No reference image loaded</span>
+              </label>
+
+              <label id="drop-deformed-image" class="real-dropzone">
+                <input id="input-deformed-image" type="file" accept="image/*">
+                <span class="icon is-large"><i class="fas fa-camera"></i></span>
+                <span class="real-dropzone-title">Deformed image</span>
+                <span class="real-dropzone-hint">Drop the captured/deformed image here, or click to choose an image.</span>
+                <span id="deformed-upload-status" class="real-upload-status">No deformed image loaded</span>
+              </label>
+            </div>
+            <p class="real-mode-note">
+              After loading the two images, use the same pipeline: Autocorrelation → Detect Peaks → Validate Affinity → Rectify / Show Rectified Patches / Show Triangulation.
+            </p>
+          </div>
+
           <div class="interactive-toolbar">
-            <button id="btn-generate-texture" class="button is-dark is-rounded">
+            <button id="btn-generate-texture" class="button synthetic-only is-dark is-rounded">
               <span class="icon"><i class="fas fa-wand-magic-sparkles"></i></span>
               <span>Generate Texture</span>
             </button>
 
-            <button id="btn-change-projection" class="button is-link is-rounded">
+            <button id="btn-change-projection" class="button synthetic-only is-link is-rounded">
               <span class="icon"><i class="fas fa-arrows-rotate"></i></span>
               <span>Change Projection</span>
             </button>
@@ -767,14 +912,14 @@
               <span>Clear Affinities</span>
             </button>
 
-            <button id="btn-reset-params" class="button is-light is-rounded">
+            <button id="btn-reset-params" class="button synthetic-only is-light is-rounded">
               <span class="icon"><i class="fas fa-rotate-left"></i></span>
               <span>Reset Params</span>
             </button>
           </div>
 
           <div class="interactive-workspace">
-            <aside class="interactive-side is-left">
+            <aside class="interactive-side is-left synthetic-only">
               <div class="control-card">
                 <h3>Texture Parameters</h3>
                 <div class="control-grid">
@@ -852,7 +997,7 @@
               </p>
             </div>
 
-            <aside class="interactive-side is-right">
+            <aside class="interactive-side is-right synthetic-only">
               <div class="control-card">
                 <h3>Projection Parameters</h3>
 

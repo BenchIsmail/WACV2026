@@ -313,7 +313,14 @@
         idwPower: 2.0,           // inverse-distance weighting for local interpolation
         detectStride: 3,         // optional local peak re-detection every N grid vertices
         maxDetectionChecks: 120, // safety limit for extra peak checks
-        minConfidence: 0.15
+        minConfidence: 0.15,
+
+        // REAL TESTS ONLY:
+        // In real-image mode the triangulation must NOT reuse the synthetic
+        // periodic lattice (U,V). It is drawn as a regular image-space mesh
+        // covering the whole uploaded test canvas.
+        realGridMargin: 0,
+        realGridDivisions: 34
       }
     };
 
@@ -1887,7 +1894,88 @@
       return best;
     }
 
+    function buildRealImageTriangulation() {
+      const anchors = (state.validatedAffinities || []).filter((a) =>
+        a && isFinitePoint(a.center)
+      );
+
+      const margin = Math.max(0, Math.floor(state.triangulationOptions.realGridMargin || 0));
+      const x0 = margin;
+      const y0 = margin;
+      const x1 = state.size - margin;
+      const y1 = state.size - margin;
+
+      const maxTriangles = Math.max(50, Math.floor(state.triangulationOptions.maxTriangles || 2400));
+      const requestedDivisions = Math.floor(state.triangulationOptions.realGridDivisions || 34);
+      const safeDivisions = Math.floor(Math.sqrt(maxTriangles / 2));
+      const n = Math.max(4, Math.min(requestedDivisions, safeDivisions));
+
+      const vertices = [];
+      const index = new Map();
+      const keyOf = (i, j) => `${i},${j}`;
+
+      for (let j = 0; j <= n; j++) {
+        const y = y0 + (y1 - y0) * (j / n);
+        for (let i = 0; i <= n; i++) {
+          const x = x0 + (x1 - x0) * (i / n);
+          const id = vertices.length;
+          index.set(keyOf(i, j), id);
+          vertices.push({
+            id,
+            i,
+            j,
+            refX: x,
+            refY: y,
+            x,
+            y,
+            patchSize: state.patchSize,
+            checked: false,
+            localPair: null
+          });
+        }
+      }
+
+      const triangles = [];
+      for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+          const aId = index.get(keyOf(i, j));
+          const bId = index.get(keyOf(i + 1, j));
+          const cId = index.get(keyOf(i, j + 1));
+          const dId = index.get(keyOf(i + 1, j + 1));
+
+          if (((i + j) & 1) === 0) {
+            triangles.push([aId, bId, cId]);
+            triangles.push([bId, dId, cId]);
+          } else {
+            triangles.push([aId, bId, dId]);
+            triangles.push([aId, dId, cId]);
+          }
+        }
+      }
+
+      return {
+        vertices,
+        triangles: triangles.slice(0, maxTriangles),
+        anchors: anchors.length,
+        origin: { x: x0, y: y0 },
+        checkedDetections: 0,
+        nominalStep: (x1 - x0) / n,
+        mode: "real-image-grid",
+        bounds: { x0, y0, x1, y1 },
+        consistentAnchors: anchors.map((a, idx) => ({
+          x: a.center.x,
+          y: a.center.y,
+          gridI: idx,
+          gridJ: 0
+        }))
+      };
+    }
+
     function buildTriangulationFromValidatedAffinities() {
+      if (state.testMode === "real") {
+        return buildRealImageTriangulation();
+      }
+
       const latticeInfo = computeConsistentAnchorLattice();
       if (!latticeInfo || !latticeInfo.anchors || latticeInfo.anchors.length < 1) {
         setValidationMessage("Validate at least one patch before triangulation");
@@ -2042,7 +2130,11 @@
         setValidationMessage("Triangulation failed: not enough valid local anchors");
       } else {
         state.triangulationData = mesh;
-        setValidationMessage(`Triangulation: ${mesh.triangles.length} triangles from ${mesh.anchors} validated anchors`);
+        if (mesh.mode === "real-image-grid") {
+          setValidationMessage(`Real-image triangulation: ${mesh.triangles.length} triangles covering the uploaded test image | anchors: ${mesh.anchors}`);
+        } else {
+          setValidationMessage(`Triangulation: ${mesh.triangles.length} triangles from ${mesh.anchors} validated anchors`);
+        }
       }
       refreshRectificationUI();
       redrawMainCanvas();
@@ -2084,7 +2176,9 @@
 
       ctx.font = "bold 13px Inter, Arial, sans-serif";
       ctx.textBaseline = "top";
-      const label = `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors}`;
+      const label = mesh.mode === "real-image-grid"
+        ? `Real image grid: ${triangles.length} triangles | anchors: ${mesh.anchors}`
+        : `Triangulation: ${triangles.length} triangles | anchors: ${mesh.anchors}`;
       const pad = 7;
       const tw = ctx.measureText(label).width;
       ctx.fillStyle = "rgba(15, 23, 42, 0.82)";

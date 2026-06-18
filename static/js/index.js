@@ -320,7 +320,7 @@
         // periodic lattice (U,V). It is drawn as a regular image-space mesh
         // covering the whole uploaded test canvas.
         realGridMargin: 0,
-        realGridDivisions: 34
+        realGridDivisions: 100
       }
     };
 

@@ -62,6 +62,13 @@
     const referenceUploadStatus = document.getElementById("reference-upload-status");
     const deformedUploadStatus = document.getElementById("deformed-upload-status");
 
+    const realShiftUX = document.getElementById("real-shift-u-x");
+    const realShiftUY = document.getElementById("real-shift-u-y");
+    const realShiftVX = document.getElementById("real-shift-v-x");
+    const realShiftVY = document.getElementById("real-shift-v-y");
+    const btnRealUseSyntheticShifts = document.getElementById("btn-real-use-synthetic-shifts");
+    const realShiftsSummary = document.getElementById("real-shifts-summary");
+
     const acorrPreview = document.getElementById("acorr-preview");
     const acorrCanvas = document.getElementById("acorr-canvas");
     const acorrCtx = acorrCanvas
@@ -174,6 +181,15 @@
         normShift: 22,
         blurSigma: 1.05
       },
+      realShifts: {
+        // Real mode does not use the synthetic texture sliders.
+        // These are the two fundamental shifts of the uploaded reference texture,
+        // in image coordinates: x = column, y = row.
+        uX: 0,
+        uY: 22,
+        vX: 22,
+        vY: 0
+      },
       affine: {
         rotationDeg: -18,
         scaleX: 0.90,
@@ -242,6 +258,7 @@
       lockedPatchY: 450,
       displayMode: "autocorr",
       texture: { ...DEFAULTS.texture },
+      realShifts: { ...DEFAULTS.realShifts },
       affine: { ...DEFAULTS.affine },
       perspective: { ...DEFAULTS.perspective },
       cylindrical: { ...DEFAULTS.cylindrical },
@@ -676,6 +693,7 @@
         btnRealTests.classList.toggle("is-light", !isReal);
       }
       if (projectionModeLabel) projectionModeLabel.textContent = isReal ? "Real image" : state.projectionModes[state.projectionIndex];
+      refreshRealShiftsSummary();
     }
 
     function setTestMode(mode) {
@@ -823,6 +841,41 @@
       if (validationStateLabel) validationStateLabel.textContent = message;
     }
 
+    function parseRealShiftInput(el, fallback) {
+      if (!el) return fallback;
+      const value = Number.parseFloat(el.value);
+      return Number.isFinite(value) ? value : fallback;
+    }
+
+    function syntheticShiftVectorsFromCurrentTexture() {
+      const k = degToRad(state.texture.angleShiftDeg);
+      const norm = Number(state.texture.normShift) || 0;
+      return {
+        U: [0, Math.round(norm)],
+        V: [Math.round(norm * Math.sin(k)), Math.round(norm * Math.cos(k))]
+      };
+    }
+
+    function refreshRealShiftsSummary() {
+      if (!realShiftsSummary) return;
+      const U = [state.realShifts.uX, state.realShifts.uY];
+      const V = [state.realShifts.vX, state.realShifts.vY];
+      const det = U[0] * V[1] - U[1] * V[0];
+      const detMsg = Number.isFinite(det) ? ` · det=${det.toFixed(2)}` : "";
+      realShiftsSummary.textContent = `U=(${U[0].toFixed(1)}, ${U[1].toFixed(1)}), V=(${V[0].toFixed(1)}, ${V[1].toFixed(1)})${detMsg}`;
+    }
+
+    function setRealShiftsFromSyntheticTexture() {
+      const refs = syntheticShiftVectorsFromCurrentTexture();
+      state.realShifts = {
+        uX: refs.U[0],
+        uY: refs.U[1],
+        vX: refs.V[0],
+        vY: refs.V[1]
+      };
+      syncControlsFromState();
+    }
+
     function refreshRectificationUI() {
       if (validatedAffinityCount) validatedAffinityCount.textContent = String(state.validatedAffinities.length);
       if (rectificationStateLabel) {
@@ -853,6 +906,7 @@
       }
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
+      refreshRealShiftsSummary();
       refreshPeakStateUI();
     }
 
@@ -864,7 +918,7 @@
       if (panelShoulder) panelShoulder.classList.toggle("is-active", mode === "Shoulder");
       if (panelCrumpled) panelCrumpled.classList.toggle("is-active", mode === "Crumpled");
       if (panelTwoPlanes) panelTwoPlanes.classList.toggle("is-active", mode === "Two Planes");
-      if (projectionModeLabel) projectionModeLabel.textContent = mode;
+      if (projectionModeLabel) projectionModeLabel.textContent = state.testMode === "real" ? "Real image" : mode;
     }
 
     function refreshControlLabels() {
@@ -914,6 +968,7 @@
       if (contrastValue) contrastValue.textContent = `${state.previewContrast.toFixed(1)}×`;
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
+      refreshRealShiftsSummary();
       refreshPeakStateUI();
       refreshRectificationUI();
     }
@@ -925,6 +980,11 @@
       if (texShift) texShift.value = String(state.texture.normShift);
       if (texBlur) texBlur.value = String(state.texture.blurSigma);
       if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
+
+      if (realShiftUX) realShiftUX.value = String(state.realShifts.uX);
+      if (realShiftUY) realShiftUY.value = String(state.realShifts.uY);
+      if (realShiftVX) realShiftVX.value = String(state.realShifts.vX);
+      if (realShiftVY) realShiftVY.value = String(state.realShifts.vY);
 
       if (controls["param-a-rot"]) controls["param-a-rot"].value = String(state.affine.rotationDeg);
       if (controls["param-a-scalex"]) controls["param-a-scalex"].value = String(state.affine.scaleX);
@@ -978,6 +1038,11 @@
       if (texShift) state.texture.normShift = parseInt(texShift.value, 10);
       if (texBlur) state.texture.blurSigma = parseFloat(texBlur.value);
       if (patchSizeControl) state.patchSize = clamp(parseInt(patchSizeControl.value, 10), 32, 140);
+
+      state.realShifts.uX = parseRealShiftInput(realShiftUX, state.realShifts.uX);
+      state.realShifts.uY = parseRealShiftInput(realShiftUY, state.realShifts.uY);
+      state.realShifts.vX = parseRealShiftInput(realShiftVX, state.realShifts.vX);
+      state.realShifts.vY = parseRealShiftInput(realShiftVY, state.realShifts.vY);
 
       if (controls["param-a-rot"]) state.affine.rotationDeg = parseInt(controls["param-a-rot"].value, 10);
       if (controls["param-a-scalex"]) state.affine.scaleX = parseFloat(controls["param-a-scalex"].value);
@@ -2816,16 +2881,20 @@
     }
 
     function getExpectedLocalForwardAffinity(center) {
-      // In the interactive demo the deformation is synthetically generated, so
-      // we can compute the expected local Jacobian source -> displayed image.
-      // This is the strongest way to disambiguate the six autocorrelation peaks.
-      if (center && typeof sourceToDisplayJacobianAt === "function") {
+      // Synthetic mode: the deformation is known, so the theoretical local
+      // Jacobian is a useful way to disambiguate the six peak assignments.
+      if (state.testMode !== "real" && center && typeof sourceToDisplayJacobianAt === "function") {
         const J = sourceToDisplayJacobianAt(center.x, center.y);
         if (J && Number.isFinite(mat2Det(J)) && Math.abs(mat2Det(J)) > 1e-9) return J;
       }
+
+      // Real mode: there is no synthetic projection. After the first validated
+      // patch, the already validated mean affinity becomes the only geometric
+      // prior. Before that, we keep MExpected=null so phase correlation and the
+      // manually entered shifts drive the first assignment.
       const mean = getValidatedMeanAffinity();
       if (mean) return mean;
-      return [[1, 0], [0, 1]];
+      return state.testMode === "real" ? null : [[1, 0], [0, 1]];
     }
 
     function geometryPenaltyForCandidate(M, MExpected, MMean) {
@@ -2963,7 +3032,7 @@
           Vref,
           detection,
           observedPeaks,
-          projectionMode: state.projectionModes[state.projectionIndex]
+          projectionMode: state.testMode === "real" ? "Real image" : state.projectionModes[state.projectionIndex]
         });
       }
 
@@ -3273,6 +3342,20 @@
       return [sx / Math.max(1, n), sy / Math.max(1, n)];
     }
 
+    function averageValidatedReferenceCenter() {
+      let sx = 0.0;
+      let sy = 0.0;
+      let n = 0;
+      for (const item of state.validatedAffinities) {
+        if (!item || !item.referenceCenter || !isFinitePoint(item.referenceCenter)) continue;
+        sx += item.referenceCenter.x;
+        sy += item.referenceCenter.y;
+        n++;
+      }
+      if (!n) return null;
+      return [sx / n, sy / n];
+    }
+
     function anchorHomographyAtSourcePoint(H, anchorDef, anchorRef) {
       // The Jacobian-only optimization estimates the local derivatives of the
       // rectifying map H: deformed -> reference, but it does not determine the
@@ -3317,10 +3400,10 @@
       const opt = optimizeLeastSquaresHomographyJS(As, ys, 120, false);
 
       const anchorDef = averageValidatedCenter();
-      const anchorRefMapped = mapDisplayToSource(anchorDef[0], anchorDef[1]);
-      const anchorRef = anchorRefMapped
-        ? [anchorRefMapped.x, anchorRefMapped.y]
-        : anchorDef;
+      const anchorRefFromMatches = averageValidatedReferenceCenter();
+      const anchorRefMapped = state.testMode === "real" ? null : mapDisplayToSource(anchorDef[0], anchorDef[1]);
+      const anchorRef = anchorRefFromMatches
+        || (anchorRefMapped ? [anchorRefMapped.x, anchorRefMapped.y] : anchorDef);
       const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
 
       state.rectificationTransform = opt;
@@ -3396,6 +3479,7 @@
     }
 
     function mapDisplayToSource(x, y) {
+      if (state.testMode === "real") return null;
       const mode = state.projectionModes[state.projectionIndex];
       if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
       if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
@@ -3499,19 +3583,31 @@
     }
 
     function sourceToDisplayJacobianAt(x, y) {
+      if (state.testMode === "real") return null;
       const JdisplayToSource = numericalJacobianDisplayToSource(x, y);
       if (!JdisplayToSource) return null;
       return mat2Inv(JdisplayToSource);
     }
 
     function getTextureShiftVectorsSourcePx() {
-      const k = degToRad(state.texture.angleShiftDeg);
-      const U = [0, Math.round(state.texture.normShift)];
-      const V = [Math.round(state.texture.normShift * Math.sin(k)), Math.round(state.texture.normShift * Math.cos(k))];
-      return { U, V };
+      if (state.testMode === "real") {
+        // In real rectification tests, the reference shifts are entered manually
+        // from the uploaded fronto-parallel/reference image. We deliberately do
+        // not read state.texture.angleShiftDeg / state.texture.normShift here.
+        return {
+          U: [Number(state.realShifts.uX) || 0, Number(state.realShifts.uY) || 0],
+          V: [Number(state.realShifts.vX) || 0, Number(state.realShifts.vY) || 0]
+        };
+      }
+      return syntheticShiftVectorsFromCurrentTexture();
     }
 
     function getTheoreticalPeakInfo(acW, acH, displayX, displayY) {
+      if (state.testMode === "real") {
+        // No synthetic projection is known in real mode. We therefore avoid
+        // orienting the detected hexagon with synthetic theoretical peaks.
+        return { peaks: [], U_ref_rc: null, V_ref_rc: null };
+      }
       const J = sourceToDisplayJacobianAt(displayX, displayY);
       if (!J) return { peaks: [], U_ref_rc: null, V_ref_rc: null };
       const { U, V } = getTextureShiftVectorsSourcePx();
@@ -4069,6 +4165,17 @@
     }
 
     function getCurrentDeformationParameters() {
+      if (state.testMode === 'real') {
+        return {
+          mode: 'Real image',
+          parameters: {
+            real_shift_u_x_px: exportSafeNumber(state.realShifts.uX),
+            real_shift_u_y_px: exportSafeNumber(state.realShifts.uY),
+            real_shift_v_x_px: exportSafeNumber(state.realShifts.vX),
+            real_shift_v_y_px: exportSafeNumber(state.realShifts.vY)
+          }
+        };
+      }
       const mode = state.projectionModes[state.projectionIndex] || 'Unknown';
       if (mode === 'Affine') {
         return {
@@ -4258,6 +4365,7 @@
     }
 
     function computeTrueDeformationHomographySourceToDisplayed() {
+      if (state.testMode === 'real') return null;
       const mode = state.projectionModes[state.projectionIndex];
       const w = state.size;
       const h = state.size;
@@ -4389,7 +4497,14 @@
           dilation_radius: state.texture.dilation,
           shift_angle_deg: state.texture.angleShiftDeg,
           shift_norm_px: state.texture.normShift,
-          gaussian_blur_sigma: state.texture.blurSigma
+          gaussian_blur_sigma: state.texture.blurSigma,
+          real_mode_shifts_xy_px: {
+            U: exportVec2([state.realShifts.uX, state.realShifts.uY]),
+            V: exportVec2([state.realShifts.vX, state.realShifts.vY]),
+            note: state.testMode === 'real'
+              ? 'These manually entered shifts are used for real-mode affinity estimation and rectification.'
+              : 'Synthetic mode uses shift_angle_deg and shift_norm_px.'
+          }
         },
         original_shifts_source_px: {
           convention: 'xy, in the undeformed/source texture',
@@ -4480,6 +4595,7 @@
       state.testMode = "synthetic";
       updateTestModeUI();
       state.texture = { ...DEFAULTS.texture };
+      state.realShifts = { ...DEFAULTS.realShifts };
       state.affine = { ...DEFAULTS.affine };
       state.perspective = { ...DEFAULTS.perspective };
       state.cylindrical = { ...DEFAULTS.cylindrical };
@@ -4639,6 +4755,40 @@
     }
 
     if (btnResetParams) btnResetParams.addEventListener("click", () => resetAllParams());
+
+    const realShiftInputs = [realShiftUX, realShiftUY, realShiftVX, realShiftVY].filter(Boolean);
+    realShiftInputs.forEach((el) => {
+      el.addEventListener("input", () => {
+        updateStateFromControls();
+        if (state.testMode === "real") {
+          clearValidatedAffinities();
+          setValidationMessage("Real initial shifts updated. Validate the affinities again.");
+          if (state.autocorrEnabled) {
+            const p = getActivePatchCenter();
+            renderAutocorrelationAt(p.x, p.y);
+          } else {
+            redrawMainCanvas();
+          }
+        }
+      });
+    });
+
+    if (btnRealUseSyntheticShifts) {
+      btnRealUseSyntheticShifts.addEventListener("click", () => {
+        updateStateFromControls();
+        setRealShiftsFromSyntheticTexture();
+        if (state.testMode === "real") {
+          clearValidatedAffinities();
+          setValidationMessage("Real shifts copied from the current synthetic texture parameters. Validate the affinities again.");
+          if (state.autocorrEnabled) {
+            const p = getActivePatchCenter();
+            renderAutocorrelationAt(p.x, p.y);
+          } else {
+            redrawMainCanvas();
+          }
+        }
+      });
+    }
 
     if (contrastSlider) {
       contrastSlider.addEventListener("input", () => {

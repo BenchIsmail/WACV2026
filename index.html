@@ -630,6 +630,75 @@
       line-height: 1.55;
     }
 
+    .real-shifts-panel {
+      margin-top: 1rem;
+      padding: 1rem;
+      border-radius: 16px;
+      background: white;
+      border: 1px solid rgba(15, 23, 42, 0.10);
+      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+    }
+
+    .real-shifts-header h3 {
+      font-size: 1rem;
+      font-weight: 800;
+      color: #0f172a;
+      margin-bottom: 0.25rem;
+    }
+
+    .real-shifts-header p {
+      margin: 0 0 0.85rem;
+      color: #475569;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    .real-shifts-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 0.75rem;
+    }
+
+    .real-shift-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-size: 0.82rem;
+      font-weight: 700;
+      color: #334155;
+    }
+
+    .real-shift-field input {
+      width: 100%;
+      border: 1px solid rgba(15, 23, 42, 0.16);
+      border-radius: 10px;
+      padding: 0.55rem 0.65rem;
+      font: inherit;
+      font-weight: 700;
+      color: #0f172a;
+      background: #f8fafc;
+    }
+
+    .real-shift-field input:focus {
+      outline: 2px solid rgba(37, 99, 235, 0.25);
+      background: white;
+      border-color: rgba(37, 99, 235, 0.45);
+    }
+
+    .real-shifts-actions {
+      margin-top: 0.85rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .real-shifts-summary {
+      color: #1d4ed8;
+      font-size: 0.86rem;
+      font-weight: 800;
+    }
+
     body.real-tests-mode .synthetic-only {
       display: none !important;
     }
@@ -648,6 +717,10 @@
     @media screen and (max-width: 900px) {
       .real-upload-grid {
         grid-template-columns: 1fr;
+      }
+
+      .real-shifts-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 
@@ -856,6 +929,42 @@
                 <span id="deformed-upload-status" class="real-upload-status">No deformed image loaded</span>
               </label>
             </div>
+            <div id="real-shifts-panel" class="real-shifts-panel">
+              <div class="real-shifts-header">
+                <h3>Initial shifts for real tests</h3>
+                <p>
+                  These are the fundamental shifts of the <strong>reference image</strong>, in source-image pixels.
+                  In real mode, these values replace the synthetic shift angle/norm when estimating affinities and rectifying the uploaded deformed image.
+                </p>
+              </div>
+
+              <div class="real-shifts-grid">
+                <label class="real-shift-field" for="real-shift-u-x">
+                  Ux
+                  <input id="real-shift-u-x" type="number" step="0.1" value="0">
+                </label>
+                <label class="real-shift-field" for="real-shift-u-y">
+                  Uy
+                  <input id="real-shift-u-y" type="number" step="0.1" value="22">
+                </label>
+                <label class="real-shift-field" for="real-shift-v-x">
+                  Vx
+                  <input id="real-shift-v-x" type="number" step="0.1" value="22">
+                </label>
+                <label class="real-shift-field" for="real-shift-v-y">
+                  Vy
+                  <input id="real-shift-v-y" type="number" step="0.1" value="0">
+                </label>
+              </div>
+
+              <div class="real-shifts-actions">
+                <button id="btn-real-use-synthetic-shifts" class="button is-small is-link is-light is-rounded" type="button">
+                  Use current synthetic shifts
+                </button>
+                <span id="real-shifts-summary" class="real-shifts-summary">U=(0, 22), V=(22, 0)</span>
+              </div>
+            </div>
+
             <p class="real-mode-note">
               After loading the two images, use the same pipeline: Autocorrelation → Detect Peaks → Validate Affinity → Rectify / Show Rectified Patches / Show Triangulation.
             </p>

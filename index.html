@@ -1016,6 +1016,16 @@
               <span>Save Deformation Details</span>
             </button>
 
+            <button id="btn-record-homography-test" class="button is-danger is-light is-rounded synthetic-only">
+              <span class="icon"><i class="fas fa-flask-vial"></i></span>
+              <span>Record Homography Test</span>
+            </button>
+
+            <button id="btn-export-homography-tests" class="button is-link is-light is-rounded synthetic-only">
+              <span class="icon"><i class="fas fa-table"></i></span>
+              <span>Export Homography Dataset</span>
+            </button>
+
             <button id="btn-clear-affinities" class="button is-light is-rounded">
               <span class="icon"><i class="fas fa-trash"></i></span>
               <span>Clear Affinities</span>
@@ -1067,6 +1077,20 @@
                     <span id="val-patch-slider" class="control-value">90 px</span>
                     <input id="patch-size-control" type="range" min="32" max="140" step="2" value="90">
                   </div>
+
+                  <div class="control-row">
+                    <span>Joint refiner</span>
+                    <select id="peak-refinement-method" class="input is-small" style="grid-column: 1 / -1;">
+                      <option value="quadratic" selected>Quadratic joint energy</option>
+                      <option value="tps">TPS joint energy</option>
+                    </select>
+                  </div>
+
+                  <div class="control-row">
+                    <span>TPS λ</span>
+                    <span id="val-tps-lambda" class="control-value">0.001</span>
+                    <input id="tps-lambda-control" type="number" min="0" step="0.0001" value="0.001" style="grid-column: 1 / -1;">
+                  </div>
                 </div>
               </div>
             </aside>
@@ -1100,7 +1124,7 @@
                 Clique sur les <strong>valeurs bleues</strong> des sliders pour entrer une valeur exacte.
                 Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
                 Utilise <strong>Detect Peaks</strong> pour afficher uniquement les pics trouvés.
-                Clique pour <strong>verrouiller</strong> un patch, ajuste sa taille, puis clique sur <strong>Validate Affinity</strong> quand les pics affichés par <strong>Detect Peaks</strong> sont corrects.
+                Clique pour <strong>verrouiller</strong> un patch et choisis manuellement la <strong>taille minimale</strong> donnant six pics fiables. Aucun balayage multi-échelle automatique n’est effectué. Sélectionne le raffinement joint <strong>Quadratic</strong> ou <strong>TPS</strong>, puis clique sur <strong>Validate Affinity</strong>.
                 Répète l’opération sur plusieurs zones. À chaque validation, la paire d’affinité est choisie automatiquement parmi les 6 possibilités par corrélation de phase avec l’image originale. Utilise <strong>Show Rectified Patches</strong> pour vérifier localement chaque patch redressé, puis active <strong>Rectify</strong> pour le redressement global.
                 Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
               </p>

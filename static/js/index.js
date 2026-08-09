@@ -2924,11 +2924,14 @@
     }
 
     function estimateCurrentAffinityFromDetection() {
-      if (!state.displayedImageData || !state.sourceImageData) return null;
+      if (!state.displayedImageData || !state.sourceImageData) {
+        setValidationMessage("Missing source/deformed image data");
+        return null;
+      }
       const fresh = getDisplayedDetectionForValidation();
       const detection = fresh.detection;
       if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
-        setValidationMessage("No displayed peaks");
+        setValidationMessage("No displayed peaks - run Detect Peaks first");
         return null;
       }
 
@@ -2939,20 +2942,39 @@
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
-
       const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
       const assignmentCandidates = buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref);
-      const candidates = [];
 
+      // Thesis order: six-vertex LS -> determinant/conditioning/residual rejection -> phase correlation.
+      // This avoids running large FFT phase correlations for candidates already known to be invalid.
+      const geometryValid = [];
+      const rejectedReasons = [];
       for (const baseCandidate of assignmentCandidates) {
+        const g = geometryValidityForAffinityCandidate(baseCandidate);
+        baseCandidate.geometricallyValid = g.valid;
+        baseCandidate.rejectionReasons = g.reasons;
+        baseCandidate.det = g.det;
+        baseCandidate.conditionNumber = g.cond;
+        if (!g.valid) {
+          rejectedReasons.push(`s${baseCandidate.orderShift}:${g.reasons.join('+') || 'invalid'}`);
+          continue;
+        }
+        geometryValid.push(baseCandidate);
+      }
+
+      if (!geometryValid.length) {
+        setValidationMessage(`Patch rejected geometrically (${rejectedReasons.join(' | ')})`);
+        return null;
+      }
+
+      const candidates = [];
+      for (const baseCandidate of geometryValid) {
         const M = baseCandidate.M;
-        if (!M) continue;
         const Arect = mat2Inv(M);
         if (!Arect) continue;
         const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
         const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(rectifiedPatch, state.patchSize, state.patchSize);
         if (!wholeRefMatch) continue;
-
         candidates.push({
           ...baseCandidate,
           M,
@@ -2976,15 +2998,28 @@
       }
 
       if (!candidates.length) {
-        setValidationMessage("No solvable six-vertex affinity from displayed peaks");
+        setValidationMessage("Phase correlation failed for all geometrically valid assignments");
         return null;
       }
 
-      const best = chooseBestAffinityCandidate(candidates);
-      if (!best) {
-        setValidationMessage("Patch rejected: geometry invalid or phase assignment ambiguous");
+      candidates.sort((a,b)=>(Number(b.phaseScore)||0)-(Number(a.phaseScore)||0));
+      const best=candidates[0];
+      const s1=Number(best.phaseScore)||0;
+      const s2=candidates.length>1?(Number(candidates[1].phaseScore)||0):0;
+      const ratio=s1/(s2+1e-12);
+      best.phaseRatioToSecond=ratio;
+      const tau=Number(state.peakDetection.phaseAbsoluteMin);
+      const rho=Number(state.peakDetection.phaseRatioMin);
+      if (s1 < tau) {
+        setValidationMessage(`Patch rejected by phase score: S1=${s1.toFixed(4)} < tau=${tau.toFixed(4)}`);
         return null;
       }
+      if (ratio < rho) {
+        setValidationMessage(`Patch ambiguous by phase: S1=${s1.toFixed(4)}, S2=${s2.toFixed(4)}, ratio=${ratio.toFixed(2)} < rho=${rho.toFixed(2)}`);
+        return null;
+      }
+
+      best.accepted=true;
       best.allCandidates = candidates;
       best.selectionMode = "six_vertices_weighted_ls_then_hard_geometry_filters_then_phase_correlation";
       return best;
@@ -3171,27 +3206,39 @@
     function validateCurrentAffinity() {
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
-      const p = getActivePatchCenter();
-      renderAutocorrelationAt(p.x, p.y);
+
+      // Do not recompute detection/phase correlation twice. Validation uses exactly
+      // the hexagon currently displayed to the user.
+      if (!state.lastDetection || !state.lastDetection.u_fin || !state.lastDetection.v_fin || !state.lastDetection.w_fin) {
+        const p = getActivePatchCenter();
+        renderAutocorrelationAt(p.x, p.y);
+      }
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
       if (!estimate) {
         refreshRectificationUI();
         redrawMainCanvas();
-        return;
+        return false;
       }
       state.validatedAffinities.push(estimate);
+
+      // Immediately expose the local rectification for the user's manual visual check.
+      state.patchViewEnabled = true;
       const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
       const shiftMsg = estimate.orderShift === undefined ? "?" : String(estimate.orderShift);
       const ratioMsg = Number.isFinite(estimate.phaseRatioToSecond) ? estimate.phaseRatioToSecond.toFixed(2) : "?";
-      setValidationMessage(`OK - cyclic shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}`);
-      recomputeRectification();
-      if (state.triangulationEnabled) {
-        state.triangulationData = buildTriangulationFromValidatedAffinities();
+      const nValid = state.validatedAffinities.length;
+      if (nValid < 4) {
+        setValidationMessage(`Affinity ${nValid}/4 validated | shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}. Local rectification shown below.`);
+      } else {
+        setValidationMessage(`Affinity ${nValid} validated | shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}. Global rectification available.`);
       }
+      recomputeRectification();
+      if (state.triangulationEnabled) state.triangulationData = buildTriangulationFromValidatedAffinities();
       refreshRectificationUI();
       renderValidatedPatchesPanel();
       redrawMainCanvas();
+      return true;
     }
 
     function clearValidatedAffinities() {
@@ -3414,9 +3461,17 @@
       drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
 
       if (state.peaksEnabled) {
+        // Detection stage only. Do NOT run affinity assignment / phase correlation here:
+        // it is expensive and, according to the thesis workflow, belongs to the
+        // explicit Validate Affinity step.
         const detection = findHexagonJS(ac, computeSize, state.peakDetection);
         state.lastDetection = detection;
-        state.lastAffinityEstimate = estimateCurrentAffinityFromDetection();
+        state.lastAffinityEstimate = null;
+        if (detection && detection.u_fin && detection.v_fin && detection.w_fin) {
+          setValidationMessage(`Peaks ready (${detection.method || state.peakDetection.refinementMethod}) - click Validate Affinity`);
+        } else {
+          setValidationMessage("No valid hexagon detected - adjust the patch and detect again");
+        }
         refreshRectificationUI();
         const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
         drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
@@ -4294,14 +4349,32 @@
     }
 
     if (btnValidateAffinity) {
-      btnValidateAffinity.addEventListener("click", () => validateCurrentAffinity());
+      btnValidateAffinity.addEventListener("click", () => {
+        if (btnValidateAffinity.disabled) return;
+        btnValidateAffinity.disabled = true;
+        setValidationMessage("Validating affinity: geometry filters + phase correlation...");
+        // Yield once so the status text is painted before the FFT work starts.
+        setTimeout(() => {
+          try {
+            validateCurrentAffinity();
+          } catch (err) {
+            console.error("Validate Affinity failed", err);
+            setValidationMessage(`Validation error: ${err && err.message ? err.message : err}`);
+          } finally {
+            btnValidateAffinity.disabled = false;
+            refreshRectificationUI();
+            redrawMainCanvas();
+          }
+        }, 20);
+      });
     }
 
     if (btnToggleRectification) {
       btnToggleRectification.addEventListener("click", () => {
         if (!state.rectificationImageData) recomputeRectification();
         if (!state.rectificationImageData) {
-          setValidationMessage("Need at least 4 validated affinities");
+          const nValid = state.validatedAffinities.length;
+          setValidationMessage(`Global Rectify requires at least 4 validated affinities (currently ${nValid}). After 1 validation, use the automatically opened Rectified Patches panel for local visual validation.`);
           refreshRectificationUI();
           redrawMainCanvas();
           return;

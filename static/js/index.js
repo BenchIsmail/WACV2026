@@ -1,4 +1,4 @@
-// index.js
+// Derived directly from user-provided index-12.js; minimal thesis/robustness patch.
 (function () {
   "use strict";
 
@@ -114,8 +114,6 @@
     const peakRefinementMethod = document.getElementById("peak-refinement-method");
     const tpsLambdaControl = document.getElementById("tps-lambda-control");
     const valTpsLambda = document.getElementById("val-tps-lambda");
-    const btnRecordHomographyTest = document.getElementById("btn-record-homography-test");
-    const btnExportHomographyTests = document.getElementById("btn-export-homography-tests");
 
     const valOccupancy = document.getElementById("val-occupancy");
     const valDilation = document.getElementById("val-dilation");
@@ -270,34 +268,39 @@
       shoulder: { ...DEFAULTS.shoulder },
       crumpled: { ...DEFAULTS.crumpled },
       twoPlanes: { ...DEFAULTS.twoPlanes },
+      // Full selected patch resolution (patch size is capped at 140 px in the UI).
+      previewComputeSize: 140,
       centerBlendRadius: 6,
 
-      // ---------------------------------------------------------
-      // Détecteur canonique conforme au document de thèse.
-      // Les maxima NMS restent ENTIERS. Le sous-pixel est uniquement joint.
-      // ---------------------------------------------------------
+      // Thesis-canonical detector. Patch size remains manually selected by the user.
       peakDetection: {
         k: 80,
         nmsSize: 9,
         excludeCenterRadius: 7.0,
         minSeparation: 3.0,
         relativePeakThreshold: 0.05,
+
         minDist: 3.0,
         antipodalTol: 2.0,
         angleMinDeg: 12.0,
         wExcludeCenterRadius: 7.0,
+
         energyBlurSigma: 1.0,
         fitRadius: 2,
         searchRadius: 1.5,
         refinementMethod: "quadratic",
+
         tpsLambda: 0.001,
         tpsCoarseSteps: 3,
         tpsMultiStarts: 6,
-        detMin: 1e-8,
-        kappaMax: 8.0,
+
+        detMin: 1e-6,
+        kappaMax: 50.0,
         affinityResidualMax: 0.20,
         phaseAbsoluteMin: 0.0,
-        phaseRatioMin: 2.0
+        phaseRatioMin: 2.0,
+
+        useStablePatch: false
       },
 
       lastDetection: null,
@@ -315,7 +318,6 @@
       globalHomography: null,
       globalHomographyInfo: null,
       lastAffinityEstimate: null,
-      homographyRobustnessRecords: [],
       sourceGrayCache: null,
       sourcePhaseReferenceCache: null,
 
@@ -908,6 +910,9 @@
       }
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
+      if (peakRefinementMethod) peakRefinementMethod.value = state.peakDetection.refinementMethod;
+      if (tpsLambdaControl) tpsLambdaControl.value = String(state.peakDetection.tpsLambda);
+      if (valTpsLambda) valTpsLambda.textContent = String(state.peakDetection.tpsLambda);
       refreshRealShiftsSummary();
       refreshPeakStateUI();
     }
@@ -982,6 +987,8 @@
       if (texShift) texShift.value = String(state.texture.normShift);
       if (texBlur) texBlur.value = String(state.texture.blurSigma);
       if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
+      if (peakRefinementMethod) peakRefinementMethod.value = state.peakDetection.refinementMethod;
+      if (tpsLambdaControl) tpsLambdaControl.value = String(state.peakDetection.tpsLambda);
 
       if (realShiftUX) realShiftUX.value = String(state.realShifts.uX);
       if (realShiftUY) realShiftUY.value = String(state.realShifts.uY);
@@ -1919,7 +1926,7 @@
     function computeHexagonDetectionAtPoint(cx, cy, patchSize) {
       if (!state.displayedImageData) return null;
       const ps = Math.round(clamp(patchSize || state.patchSize, 32, 140));
-      const computeSize = ps;
+      const computeSize = Math.min(state.previewComputeSize, ps);
       const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, ps, computeSize);
       const ac = computeAutocorrelation2D(patch, computeSize);
       return findHexagonJS(ac, computeSize, state.peakDetection);
@@ -1929,7 +1936,7 @@
       const detection = computeHexagonDetectionAtPoint(cx, cy, patchSize);
       if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) return null;
 
-      const computeSize = patchSize;
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
       const scale = patchSize / computeSize;
       const ordered6 = buildOrdered6CandidatesXY(detection, scale);
       const refs = getTextureShiftVectorsSourcePx();
@@ -2328,7 +2335,7 @@
     function getDisplayedDetectionForValidation() {
       const p = getActivePatchCenter();
       const patchSize = state.patchSize;
-      const computeSize = patchSize;
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
       if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin && state.lastDetection.w_fin) {
         return { detection: state.lastDetection, computeSize, center: p };
       }
@@ -2869,19 +2876,6 @@
       return Math.sqrt(lMax / lMin);
     }
 
-    function mat2Mean(mats) {
-      const valid = (mats || []).filter(Boolean);
-      if (!valid.length) return null;
-      const M = [[0,0],[0,0]];
-      for (const A of valid) {
-        M[0][0] += A[0][0]; M[0][1] += A[0][1];
-        M[1][0] += A[1][0]; M[1][1] += A[1][1];
-      }
-      M[0][0] /= valid.length; M[0][1] /= valid.length;
-      M[1][0] /= valid.length; M[1][1] /= valid.length;
-      return M;
-    }
-
     function geometryValidityForAffinityCandidate(candidate) {
       if (!candidate || !candidate.M) return { valid: false, reasons: ["missing_matrix"] };
       const M = candidate.M;
@@ -2924,14 +2918,11 @@
     }
 
     function estimateCurrentAffinityFromDetection() {
-      if (!state.displayedImageData || !state.sourceImageData) {
-        setValidationMessage("Missing source/deformed image data");
-        return null;
-      }
+      if (!state.displayedImageData || !state.sourceImageData) return null;
       const fresh = getDisplayedDetectionForValidation();
       const detection = fresh.detection;
       if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
-        setValidationMessage("No displayed peaks - run Detect Peaks first");
+        setValidationMessage("No displayed peaks");
         return null;
       }
 
@@ -2942,39 +2933,20 @@
       const Uref = [refs.U[0], refs.U[1]];
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
+
       const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
       const assignmentCandidates = buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref);
-
-      // Thesis order: six-vertex LS -> determinant/conditioning/residual rejection -> phase correlation.
-      // This avoids running large FFT phase correlations for candidates already known to be invalid.
-      const geometryValid = [];
-      const rejectedReasons = [];
-      for (const baseCandidate of assignmentCandidates) {
-        const g = geometryValidityForAffinityCandidate(baseCandidate);
-        baseCandidate.geometricallyValid = g.valid;
-        baseCandidate.rejectionReasons = g.reasons;
-        baseCandidate.det = g.det;
-        baseCandidate.conditionNumber = g.cond;
-        if (!g.valid) {
-          rejectedReasons.push(`s${baseCandidate.orderShift}:${g.reasons.join('+') || 'invalid'}`);
-          continue;
-        }
-        geometryValid.push(baseCandidate);
-      }
-
-      if (!geometryValid.length) {
-        setValidationMessage(`Patch rejected geometrically (${rejectedReasons.join(' | ')})`);
-        return null;
-      }
-
       const candidates = [];
-      for (const baseCandidate of geometryValid) {
+
+      for (const baseCandidate of assignmentCandidates) {
         const M = baseCandidate.M;
+        if (!M) continue;
         const Arect = mat2Inv(M);
         if (!Arect) continue;
         const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
         const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(rectifiedPatch, state.patchSize, state.patchSize);
         if (!wholeRefMatch) continue;
+
         candidates.push({
           ...baseCandidate,
           M,
@@ -2998,31 +2970,30 @@
       }
 
       if (!candidates.length) {
-        setValidationMessage("Phase correlation failed for all geometrically valid assignments");
+        setValidationMessage("No solvable six-vertex affinity from displayed peaks");
         return null;
       }
 
-      candidates.sort((a,b)=>(Number(b.phaseScore)||0)-(Number(a.phaseScore)||0));
-      const best=candidates[0];
-      const s1=Number(best.phaseScore)||0;
-      const s2=candidates.length>1?(Number(candidates[1].phaseScore)||0):0;
-      const ratio=s1/(s2+1e-12);
-      best.phaseRatioToSecond=ratio;
-      const tau=Number(state.peakDetection.phaseAbsoluteMin);
-      const rho=Number(state.peakDetection.phaseRatioMin);
-      if (s1 < tau) {
-        setValidationMessage(`Patch rejected by phase score: S1=${s1.toFixed(4)} < tau=${tau.toFixed(4)}`);
+      const best = chooseBestAffinityCandidate(candidates);
+      if (!best) {
+        setValidationMessage("Patch rejected: geometry invalid or phase assignment ambiguous");
         return null;
       }
-      if (ratio < rho) {
-        setValidationMessage(`Patch ambiguous by phase: S1=${s1.toFixed(4)}, S2=${s2.toFixed(4)}, ratio=${ratio.toFixed(2)} < rho=${rho.toFixed(2)}`);
-        return null;
-      }
-
-      best.accepted=true;
       best.allCandidates = candidates;
       best.selectionMode = "six_vertices_weighted_ls_then_hard_geometry_filters_then_phase_correlation";
       return best;
+    }
+
+    function homogeneous2(y) {
+      return [y[0], y[1], 1.0];
+    }
+
+    function embedHomography6(h) {
+      return [
+        [h[0], h[1], 0.0],
+        [h[2], h[3], 0.0],
+        [h[4], h[5], 1.0]
+      ];
     }
 
     function mat3Mul(A, B) {
@@ -3104,6 +3075,68 @@
       ];
     }
 
+    function normalizePoints(ys) {
+      let cx = 0.0, cy = 0.0;
+      for (const p of ys) { cx += p[0]; cy += p[1]; }
+      cx /= Math.max(1, ys.length); cy /= Math.max(1, ys.length);
+      let d = 0.0;
+      for (const p of ys) d += Math.hypot(p[0] - cx, p[1] - cy);
+      d /= Math.max(1, ys.length);
+      const s = d < 1e-12 ? 1.0 : Math.SQRT2 / d;
+      const T = [[s, 0.0, -s * cx], [0.0, s, -s * cy], [0.0, 0.0, 1.0]];
+      const Tinv = [[1/s, 0.0, cx], [0.0, 1/s, cy], [0.0, 0.0, 1.0]];
+      const ysN = ys.map((p) => applyHomographyPoint(T, p));
+      return { ysN, T, Tinv };
+    }
+
+    function denormalizeHomography(Hn, T) {
+      const Tinv = invert3x3(T);
+      if (!Tinv) return Hn;
+      let H = mat3Mul(mat3Mul(Tinv, Hn), T);
+      if (Math.abs(H[2][2]) > 1e-12) {
+        const s = H[2][2];
+        H = H.map((row) => row.map((v) => v / s));
+      }
+      return H;
+    }
+
+    function residualVectorHomography(h, As, ys) {
+      const H = embedHomography6(h);
+      const invH = invert3x3(H);
+      const detH = H[0][0]*(H[1][1]*H[2][2]-H[1][2]*H[2][1]) - H[0][1]*(H[1][0]*H[2][2]-H[1][2]*H[2][0]) + H[0][2]*(H[1][0]*H[2][1]-H[1][1]*H[2][0]);
+      if (!invH || !Number.isFinite(detH) || Math.abs(detH) < 1e-12) {
+        return new Float64Array(4 * As.length).fill(1e6);
+      }
+      const out = new Float64Array(4 * As.length);
+      let k = 0;
+      for (let idx = 0; idx < As.length; idx++) {
+        const Aobs = As[idx];
+        const yi = ys[idx];
+        try {
+          const J = jacobianHomographyAtInput(H, yi[0], yi[1]);
+          out[k++] = Aobs[0][0] - J[0][0];
+          out[k++] = Aobs[0][1] - J[0][1];
+          out[k++] = Aobs[1][0] - J[1][0];
+          out[k++] = Aobs[1][1] - J[1][1];
+        } catch (e) {
+          out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6;
+        }
+      }
+      return out;
+    }
+
+    function vecNorm(v) {
+      let s = 0.0;
+      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
+      return Math.sqrt(s);
+    }
+
+    function meanSquared(v) {
+      let s = 0.0;
+      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
+      return s / Math.max(1, v.length);
+    }
+
     function solveLinearSystem(A, b) {
       const n = A.length;
       const M = A.map((row, i) => row.slice().concat([b[i]]));
@@ -3125,6 +3158,66 @@
         }
       }
       return M.map((row) => row[n]);
+    }
+
+    function optimizeLeastSquaresHomographyJS(As, ys, maxIter = 120, usePointNormalization = false) {
+      let ysOpt = ys.slice();
+      let T = [[1,0,0],[0,1,0],[0,0,1]];
+      if (usePointNormalization) {
+        const norm = normalizePoints(ys);
+        ysOpt = norm.ysN;
+        T = norm.T;
+      }
+      let x = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+      let lambda = 1e-2;
+      let r = residualVectorHomography(x, As, ysOpt);
+      let cost = meanSquared(r);
+      for (let it = 0; it < maxIter; it++) {
+        const m = r.length;
+        const p = x.length;
+        const J = Array.from({ length: m }, () => new Array(p).fill(0.0));
+        for (let j = 0; j < p; j++) {
+          const eps = 1e-5 * Math.max(1.0, Math.abs(x[j]));
+          const xp = x.slice(); xp[j] += eps;
+          const xm = x.slice(); xm[j] -= eps;
+          const rp = residualVectorHomography(xp, As, ysOpt);
+          const rm = residualVectorHomography(xm, As, ysOpt);
+          for (let i = 0; i < m; i++) J[i][j] = (rp[i] - rm[i]) / (2 * eps);
+        }
+        const JTJ = Array.from({ length: p }, () => new Array(p).fill(0.0));
+        const JTr = new Array(p).fill(0.0);
+        for (let i = 0; i < m; i++) {
+          for (let a = 0; a < p; a++) {
+            JTr[a] += J[i][a] * r[i];
+            for (let b = 0; b < p; b++) JTJ[a][b] += J[i][a] * J[i][b];
+          }
+        }
+        for (let a = 0; a < p; a++) JTJ[a][a] += lambda;
+        const rhs = JTr.map((v) => -v);
+        const delta = solveLinearSystem(JTJ, rhs);
+        if (!delta) break;
+        const xTrial = x.map((v, i) => v + delta[i]);
+        const rTrial = residualVectorHomography(xTrial, As, ysOpt);
+        const costTrial = meanSquared(rTrial);
+        if (costTrial < cost) {
+          x = xTrial;
+          r = rTrial;
+          cost = costTrial;
+          lambda *= 0.6;
+          if (vecNorm(delta) < 1e-8) break;
+        } else {
+          lambda *= 2.5;
+        }
+      }
+      const Hn = embedHomography6(x);
+      const H = usePointNormalization ? denormalizeHomography(Hn, T) : Hn;
+      const residualsFinal = residualVectorHomography([H[0][0], H[0][1], H[1][0], H[1][1], H[2][0], H[2][1]], As, ys);
+      return {
+        H_3x3: H,
+        H_3x2: [[H[0][0], H[0][1]], [H[1][0], H[1][1]], [H[2][0], H[2][1]]],
+        cost: meanSquared(residualsFinal),
+        info: { success: true, iterations: maxIter, raw_result_x: x.slice() }
+      };
     }
 
     function renderRectifiedWithHomography(H) {
@@ -3162,37 +3255,93 @@
       return out;
     }
 
+    function translationHomography(tx, ty) {
+      return [
+        [1.0, 0.0, tx],
+        [0.0, 1.0, ty],
+        [0.0, 0.0, 1.0]
+      ];
+    }
+
+    function averageValidatedCenter() {
+      let sx = 0.0;
+      let sy = 0.0;
+      const n = state.validatedAffinities.length;
+      for (const item of state.validatedAffinities) {
+        sx += item.center.x;
+        sy += item.center.y;
+      }
+      return [sx / Math.max(1, n), sy / Math.max(1, n)];
+    }
+
+    function averageValidatedReferenceCenter() {
+      let sx = 0.0;
+      let sy = 0.0;
+      let n = 0;
+      for (const item of state.validatedAffinities) {
+        if (!item || !item.referenceCenter || !isFinitePoint(item.referenceCenter)) continue;
+        sx += item.referenceCenter.x;
+        sy += item.referenceCenter.y;
+        n++;
+      }
+      if (!n) return null;
+      return [sx / n, sy / n];
+    }
+
+    function anchorHomographyAtSourcePoint(H, anchorDef, anchorRef) {
+      // The Jacobian-only optimization estimates the local derivatives of the
+      // rectifying map H: deformed -> reference, but it does not determine the
+      // absolute translation robustly. We therefore impose one photometric
+      // anchor consistent with the known projection used in the demo:
+      //
+      //     H(anchorDef) = anchorRef
+      //
+      // where anchorDef is the average validated center in the deformed image,
+      // and anchorRef is its mapped position in the original texture.
+      const q = applyHomographyPoint(H, anchorDef);
+      const tx = anchorRef[0] - q[0];
+      const ty = anchorRef[1] - q[1];
+      const T = translationHomography(tx, ty);
+
+      let Hanchored = mat3Mul(T, H);
+      if (Math.abs(Hanchored[2][2]) > 1e-12) {
+        const s = Hanchored[2][2];
+        Hanchored = Hanchored.map((row) => row.map((v) => v / s));
+      }
+      return Hanchored;
+    }
+
     function recomputeRectification() {
       state.rectificationTransform = null;
       state.globalHomography = null;
       state.globalHomographyInfo = null;
       state.rectificationImageData = null;
       state.differenceImageData = null;
-      if (state.validatedAffinities.length < 4) {
+      if (state.validatedAffinities.length < 3) {
         state.rectificationEnabled = false;
         state.differenceEnabled = false;
         refreshRectificationUI();
         return;
       }
-      const usable = state.validatedAffinities.filter((item) => item && item.Arect && item.center && item.referenceCenter);
-      if (usable.length < 4) {
-        state.rectificationEnabled = false;
-        state.differenceEnabled = false;
-        refreshRectificationUI();
-        return;
-      }
-      const opt = optimizeJointHomographyFromValidatedJS(usable);
-      if (!opt || !opt.H_3x3) {
-        state.rectificationEnabled = false;
-        state.differenceEnabled = false;
-        setValidationMessage("Global homography optimization failed");
-        refreshRectificationUI();
-        return;
-      }
+      const As = state.validatedAffinities.map((item) => item.Arect);
+      const ys = state.validatedAffinities.map((item) => [item.center.x, item.center.y]);
+
+      // Do not normalize points here unless the local Jacobian targets are also
+      // transformed consistently. Keeping pixel coordinates matches the Python
+      // rectification-homography fit from local Arect matrices.
+      const opt = optimizeLeastSquaresHomographyJS(As, ys, 120, false);
+
+      const anchorDef = averageValidatedCenter();
+      const anchorRefFromMatches = averageValidatedReferenceCenter();
+      const anchorRefMapped = state.testMode === "real" ? null : mapDisplayToSource(anchorDef[0], anchorDef[1]);
+      const anchorRef = anchorRefFromMatches
+        || (anchorRefMapped ? [anchorRefMapped.x, anchorRefMapped.y] : anchorDef);
+      const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
+
       state.rectificationTransform = opt;
-      state.globalHomography = opt.H_3x3; // G: deformed -> reference, 8 DOF, g33=1.
+      state.globalHomography = Hanchored;
       state.globalHomographyInfo = opt.info;
-      state.rectificationImageData = renderRectifiedWithHomography(state.globalHomography);
+      state.rectificationImageData = renderRectifiedWithHomography(Hanchored);
       state.differenceImageData = (state.rectificationImageData && state.sourceImageData)
         ? makeDifferenceImage(state.sourceImageData, state.rectificationImageData)
         : null;
@@ -3207,38 +3356,38 @@
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
 
-      // Do not recompute detection/phase correlation twice. Validation uses exactly
-      // the hexagon currently displayed to the user.
-      if (!state.lastDetection || !state.lastDetection.u_fin || !state.lastDetection.v_fin || !state.lastDetection.w_fin) {
-        const p = getActivePatchCenter();
-        renderAutocorrelationAt(p.x, p.y);
-      }
+      // The current patch size is the manually selected p_min.
+      // Detect Peaks stays ON while p changes, so this redraw validates exactly what is visible.
+      const p = getActivePatchCenter();
+      renderAutocorrelationAt(p.x, p.y);
+
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
       if (!estimate) {
         refreshRectificationUI();
         redrawMainCanvas();
-        return false;
+        return;
       }
+
       state.validatedAffinities.push(estimate);
 
-      // Immediately expose the local rectification for the user's manual visual check.
-      state.patchViewEnabled = true;
       const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
-      const shiftMsg = estimate.orderShift === undefined ? "?" : String(estimate.orderShift);
+      const condMsg = Number.isFinite(estimate.conditionNumber) ? estimate.conditionNumber.toFixed(2) : "?";
+      const resMsg = Number.isFinite(estimate.residualRelative) ? estimate.residualRelative.toFixed(4) : "?";
       const ratioMsg = Number.isFinite(estimate.phaseRatioToSecond) ? estimate.phaseRatioToSecond.toFixed(2) : "?";
-      const nValid = state.validatedAffinities.length;
-      if (nValid < 4) {
-        setValidationMessage(`Affinity ${nValid}/4 validated | shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}. Local rectification shown below.`);
-      } else {
-        setValidationMessage(`Affinity ${nValid} validated | shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}. Global rectification available.`);
-      }
+      const methodMsg = estimate.detection?.method || state.peakDetection.refinementMethod;
+      setValidationMessage(
+        `OK - patch ${state.patchSize}px | ${methodMsg} | phase=${Number(estimate.phaseScore).toFixed(4)} | ratio=${ratioMsg} | det=${detMsg} | κ=${condMsg} | residual=${resMsg}`
+      );
+
+      // Preserve the original chain: center marker -> original Rectify/Show Difference/Show Deformed.
       recomputeRectification();
-      if (state.triangulationEnabled) state.triangulationData = buildTriangulationFromValidatedAffinities();
+      if (state.triangulationEnabled) {
+        state.triangulationData = buildTriangulationFromValidatedAffinities();
+      }
       refreshRectificationUI();
       renderValidatedPatchesPanel();
       redrawMainCanvas();
-      return true;
     }
 
     function clearValidatedAffinities() {
@@ -3273,6 +3422,116 @@
       return [[d / det, -b / det], [-c / det, a / det]];
     }
 
+    function mapDisplayToSource(x, y) {
+      if (state.testMode === "real") return null;
+      const mode = state.projectionModes[state.projectionIndex];
+      if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
+      if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
+      if (mode === "Cylindrical") return mapDisplayToSourceCylindrical(x, y);
+      if (mode === "Two Planes") return mapDisplayToSourceTwoPlanes(x, y);
+      return { x, y };
+    }
+
+    function mapDisplayToSourceAffine(x, y) {
+      const w = state.size;
+      const h = state.size;
+      const cx = w / 2;
+      const cy = h / 2;
+      const zRot = degToRad(state.affine.rotationDeg);
+      const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
+      const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
+      const M = [
+        [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
+        [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
+      ];
+      const Minv = mat2Inv(M);
+      if (!Minv) return null;
+      const srcLocal = mat2MulVec(Minv, [x - cx, y - cy]);
+      return { x: srcLocal[0] + cx, y: srcLocal[1] + cy };
+    }
+
+    function mapDisplayToSourcePerspective(x, y) {
+      const hom = buildPerspectiveHomography(state.size, state.size);
+      if (!hom || !hom.Hinv) return null;
+      const p = applyHomographyPoint(hom.Hinv, [x, y]);
+      return { x: p[0], y: p[1] };
+    }
+
+    function mapDisplayToSourceCylindrical(x, y) {
+      const w = state.size;
+      const h = state.size;
+      const zRot = degToRad(state.cylindrical.zRotationDeg);
+      const radius = 1.0;
+      const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
+      const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
+      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 2)));
+      const cameraPos = [radius + cameraDistance, 0.0, 0.0];
+      const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
+      const focalPx = 0.95 * Math.max(w, h);
+      const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
+      const cx = (w - 1) / 2;
+      const cy = (h - 1) / 2;
+      const xCam = x - cx;
+      const yCam = -(y - cy);
+      let D = addVec3(addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)), scaleVec3(fwd, focalPx));
+      D = normalizeVec3(D);
+      const Cx = cameraPos[0], Cy = cameraPos[1], Cz = cameraPos[2];
+      const Dx = D[0], Dy = D[1], Dz = D[2];
+      const a = Dx * Dx + Dy * Dy;
+      const b = 2.0 * (Cx * Dx + Cy * Dy);
+      const c = Cx * Cx + Cy * Cy - radius * radius;
+      if (a <= 1e-12) return null;
+      const disc = b * b - 4.0 * a * c;
+      if (disc <= 0.0) return null;
+      const sqrtDisc = Math.sqrt(disc);
+      const t1 = (-b - sqrtDisc) / (2.0 * a);
+      const t2 = (-b + sqrtDisc) / (2.0 * a);
+      let t = Infinity;
+      if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
+      else if (t1 > 1e-6) t = t1;
+      else if (t2 > 1e-6) t = t2;
+      if (!Number.isFinite(t)) return null;
+      const Px = Cx + t * Dx;
+      const Py = Cy + t * Dy;
+      const Pz = Cz + t * Dz;
+      const theta = Math.atan2(Py, Px);
+      const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
+      const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
+      const Nx = Math.cos(theta);
+      const Ny = Math.sin(theta);
+      const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
+      if (!insideAngular || !insideVertical || !facing) return null;
+      const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
+      const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
+      return { x: clamp(uNorm * (w - 1), 0, w - 1), y: clamp(vNorm * (h - 1), 0, h - 1) };
+    }
+
+
+    function mapDisplayToSourceTwoPlanes(x, y) {
+      const hit = rayToTwoPlanesSource(x, y, state.size, state.size);
+      if (!hit) return null;
+      return { x: hit.x, y: hit.y };
+    }
+
+    function numericalJacobianDisplayToSource(x, y) {
+      const eps = 1.0;
+      const px1 = mapDisplayToSource(x + eps, y);
+      const px0 = mapDisplayToSource(x - eps, y);
+      const py1 = mapDisplayToSource(x, y + eps);
+      const py0 = mapDisplayToSource(x, y - eps);
+      if (!px1 || !px0 || !py1 || !py0) return null;
+      return [
+        [(px1.x - px0.x) / (2 * eps), (py1.x - py0.x) / (2 * eps)],
+        [(px1.y - px0.y) / (2 * eps), (py1.y - py0.y) / (2 * eps)]
+      ];
+    }
+
+    function sourceToDisplayJacobianAt(x, y) {
+      if (state.testMode === "real") return null;
+      const JdisplayToSource = numericalJacobianDisplayToSource(x, y);
+      if (!JdisplayToSource) return null;
+      return mat2Inv(JdisplayToSource);
+    }
 
     function getTextureShiftVectorsSourcePx() {
       if (state.testMode === "real") {
@@ -3285,6 +3544,36 @@
         };
       }
       return syntheticShiftVectorsFromCurrentTexture();
+    }
+
+    function getTheoreticalPeakInfo(acW, acH, displayX, displayY) {
+      if (state.testMode === "real") {
+        // No synthetic projection is known in real mode. We therefore avoid
+        // orienting the detected hexagon with synthetic theoretical peaks.
+        return { peaks: [], U_ref_rc: null, V_ref_rc: null };
+      }
+      const J = sourceToDisplayJacobianAt(displayX, displayY);
+      if (!J) return { peaks: [], U_ref_rc: null, V_ref_rc: null };
+      const { U, V } = getTextureShiftVectorsSourcePx();
+      const JU = mat2MulVec(J, U);
+      const JV = mat2MulVec(J, V);
+      const JW = mat2MulVec(J, [U[0] - V[0], U[1] - V[1]]);
+      const cx = (acW - 1) / 2.0;
+      const cy = (acH - 1) / 2.0;
+      const peaks = [
+        { name: "+JU", vec: JU, color: "#ff3030" },
+        { name: "-JU", vec: [-JU[0], -JU[1]], color: "#ff3030" },
+        { name: "+JV", vec: JV, color: "#00ff60" },
+        { name: "-JV", vec: [-JV[0], -JV[1]], color: "#00ff60" },
+        { name: "+J(U-V)", vec: JW, color: "#fff000" },
+        { name: "-J(U-V)", vec: [-JW[0], -JW[1]], color: "#fff000" }
+      ].map((p) => ({ name: p.name, x: cx + p.vec[0], y: cy + p.vec[1], color: p.color }));
+      return {
+        peaks,
+        // références en convention [row, col] centrée, comme dans find_hexagon
+        U_ref_rc: [JU[1], JU[0]],
+        V_ref_rc: [JV[1], JV[0]]
+      };
     }
 
     // =========================================================
@@ -3307,6 +3596,34 @@
       for (let i = 0; i < out.length; i++) mean += out[i];
       mean /= Math.max(out.length, 1);
       for (let i = 0; i < out.length; i++) out[i] -= mean;
+      return out;
+    }
+
+    function computeAutocorrelation2D(grayPatch, n) {
+      const out = new Float64Array(n * n);
+      const center = Math.floor(n / 2);
+      for (let dy = -center; dy <= center; dy++) {
+        for (let dx = -center; dx <= center; dx++) {
+          let sum = 0.0;
+          let energyA = 0.0;
+          let energyB = 0.0;
+          for (let y = 0; y < n; y++) {
+            const yy = y + dy;
+            if (yy < 0 || yy >= n) continue;
+            for (let x = 0; x < n; x++) {
+              const xx = x + dx;
+              if (xx < 0 || xx >= n) continue;
+              const a = grayPatch[y * n + x];
+              const b = grayPatch[yy * n + xx];
+              sum += a * b;
+              energyA += a * a;
+              energyB += b * b;
+            }
+          }
+          const denom = Math.sqrt(Math.max(energyA * energyB, 1e-12));
+          out[(dy + center) * n + (dx + center)] = sum / denom;
+        }
+      }
       return out;
     }
 
@@ -3361,10 +3678,179 @@
       return [dr, dc];
     }
 
+    function refinePeakSubpixel3x3(R, n, r, c) {
+      if (r <= 0 || r >= n - 1 || c <= 0 || c >= n - 1) return [r, c];
+      const center = R[r * n + c];
+      const up = R[(r - 1) * n + c];
+      const down = R[(r + 1) * n + c];
+      const left = R[r * n + (c - 1)];
+      const right = R[r * n + (c + 1)];
+      const denomR = up - 2 * center + down;
+      const denomC = left - 2 * center + right;
+      let offR = 0;
+      let offC = 0;
+      if (Math.abs(denomR) > 1e-12) offR = 0.5 * (up - down) / denomR;
+      if (Math.abs(denomC) > 1e-12) offC = 0.5 * (left - right) / denomC;
+      offR = clamp(offR, -1, 1);
+      offC = clamp(offC, -1, 1);
+      return [r + offR, c + offC];
+    }
+
+    function detectCandidatesSubpixelJS(R, n, kwargs) {
+      const k = Math.max(2, Math.floor(kwargs.k ?? 80));
+      const nmsSize = Math.max(3, Math.floor(kwargs.nmsSize ?? 9));
+      const rad = Math.floor(nmsSize / 2);
+      const excludeCenterRadius = Number(kwargs.excludeCenterRadius ?? 7.0);
+      const minSeparation = Number(kwargs.minSeparation ?? 3.0);
+      const refineSubpixel = kwargs.refineSubpixel !== false;
+      const center = [n / 2.0, n / 2.0];
+      const cy = center[0];
+      const cx = center[1];
+      const candidates = [];
+
+      for (let r = 0; r < n; r++) {
+        for (let c = 0; c < n; c++) {
+          const distCenter = Math.hypot(r - cy, c - cx);
+          if (distCenter < excludeCenterRadius) continue;
+          const val = R[r * n + c];
+          let localMax = true;
+          let localMin = Infinity;
+          for (let dr = -rad; dr <= rad; dr++) {
+            for (let dc = -rad; dc <= rad; dc++) {
+              const rr = (r + dr + n) % n;
+              const cc = (c + dc + n) % n;
+              const vv = R[rr * n + cc];
+              if (vv > val) localMax = false;
+              if (vv < localMin) localMin = vv;
+            }
+          }
+          if (!localMax) continue;
+          candidates.push({ r, c, prom: val - localMin, value: val });
+        }
+      }
+
+      candidates.sort((a, b) => b.prom - a.prom);
+      const kept = [];
+      for (const cand of candidates) {
+        if (cand.prom <= 0) continue;
+        const p = [cand.r, cand.c];
+        if (kept.every((q) => torusDistance(p, q, n) >= minSeparation)) {
+          const refined = refineSubpixel ? refinePeakSubpixel3x3(R, n, cand.r, cand.c) : [cand.r, cand.c];
+          kept.push(refined);
+        }
+        if (kept.length >= k) break;
+      }
+      return kept;
+    }
+
+    function energyUVSimpleJS(R, n, uPos, vPos, kwargs) {
+      const center = [n / 2.0, n / 2.0];
+      const uOff = toCenteredOffset(uPos, n, center);
+      const vOff = toCenteredOffset(vPos, n, center);
+      const wOff = [uOff[0] - vOff[0], uOff[1] - vOff[1]];
+      const wPos = [center[0] + wOff[0], center[1] + wOff[1]];
+      const E = 2.0 * (
+        sampleArrayBilinearWrap(R, n, uPos[0], uPos[1]) +
+        sampleArrayBilinearWrap(R, n, vPos[0], vPos[1]) +
+        sampleArrayBilinearWrap(R, n, wPos[0], wPos[1])
+      );
+      return { E, wPos, wOff };
+    }
+
+    function bestPairMaxEnergyJS(R, n, positions, kwargs) {
+      if (!positions || positions.length < 2) return null;
+      const center = [n / 2.0, n / 2.0];
+      const minDist = Number(kwargs.minDist ?? 3.0);
+      const antipodalTol = Number(kwargs.antipodalTol ?? 2.0);
+      const angleMinDeg = Number(kwargs.angleMinDeg ?? 12.0);
+      const wExcludeCenterRadius = Number(kwargs.wExcludeCenterRadius ?? kwargs.excludeCenterRadius ?? 7.0);
+      const sinMin = Math.sin(degToRad(angleMinDeg));
+      let best = null;
+      let bestE = -Infinity;
+
+      for (let i = 0; i < positions.length - 1; i++) {
+        const ui = positions[i];
+        for (let j = i + 1; j < positions.length; j++) {
+          const vj = positions[j];
+          if (torusDistance(ui, vj, n) < minDist) continue;
+          const uOff = toCenteredOffset(ui, n, center);
+          const vOff = toCenteredOffset(vj, n, center);
+          if (Math.hypot(uOff[0] + vOff[0], uOff[1] + vOff[1]) < antipodalTol) continue;
+          const nu = Math.hypot(uOff[0], uOff[1]);
+          const nv = Math.hypot(vOff[0], vOff[1]);
+          if (nu < 1e-9 || nv < 1e-9) continue;
+          const sinang = Math.abs(uOff[0] * vOff[1] - uOff[1] * vOff[0]) / (nu * nv);
+          if (sinang < sinMin) continue;
+          const e = energyUVSimpleJS(R, n, ui, vj, kwargs);
+          const wDist = Math.hypot(e.wOff[0], e.wOff[1]);
+          if (wExcludeCenterRadius > 0 && wDist < wExcludeCenterRadius) continue;
+          if (e.E > bestE) {
+            bestE = e.E;
+            best = { uPos: ui, vPos: vj, wPos: e.wPos, E: e.E };
+          }
+        }
+      }
+      return best;
+    }
+
+    function cos2(a, b) {
+      const na = Math.hypot(a[0], a[1]);
+      const nb = Math.hypot(b[0], b[1]);
+      if (na < 1e-9 || nb < 1e-9) return 0;
+      return (a[0] * b[0] + a[1] * b[1]) / (na * nb);
+    }
+
+    function orientUVByRefs(uOff, vOff, wOff, U_ref_rc, V_ref_rc) {
+      if (!U_ref_rc || !V_ref_rc) return { u: uOff, v: vOff, w: wOff };
+      const cands = [
+        { u: uOff, v: vOff },
+        { u: [-uOff[0], -uOff[1]], v: vOff },
+        { u: uOff, v: [-vOff[0], -vOff[1]] },
+        { u: [-uOff[0], -uOff[1]], v: [-vOff[0], -vOff[1]] }
+      ];
+      let best = cands[0];
+      let bestScore = -Infinity;
+      for (const cand of cands) {
+        const score = cos2(cand.u, U_ref_rc) + cos2(cand.v, V_ref_rc);
+        if (score > bestScore) { bestScore = score; best = cand; }
+      }
+      const Wref = [U_ref_rc[0] - V_ref_rc[0], U_ref_rc[1] - V_ref_rc[1]];
+      const wSame = cos2(wOff, Wref) >= 0 ? wOff : [-wOff[0], -wOff[1]];
+      return { u: best.u, v: best.v, w: wSame };
+    }
+
+    function findHexagonJS(R, n, kwargs, U_ref_rc = null, V_ref_rc = null) {
+      const refined = detectCandidatesSubpixelJS(R, n, kwargs);
+      if (refined.length < 2) return null;
+      const best = bestPairMaxEnergyJS(R, n, refined, kwargs);
+      if (!best) return null;
+      const center = [n / 2.0, n / 2.0];
+      const uC = toCenteredOffset(best.uPos, n, center);
+      const vC = toCenteredOffset(best.vPos, n, center);
+      const wC = toCenteredOffset(best.wPos, n, center);
+      const oriented = orientUVByRefs(uC, vC, wC, U_ref_rc, V_ref_rc);
+      return {
+        u_fin: oriented.u,
+        v_fin: oriented.v,
+        w_fin: oriented.w,
+        energy_final: best.E,
+        refined_peaks: refined,
+        hex6_centered: [
+          oriented.u,
+          [-oriented.u[0], -oriented.u[1]],
+          oriented.v,
+          [-oriented.v[0], -oriented.v[1]],
+          oriented.w,
+          [-oriented.w[0], -oriented.w[1]]
+        ]
+      };
+    }
+
     function hexResultToPreviewPeaks(res, n) {
       if (!res) return [];
-      const cx = (n - 1) / 2.0;
-      const cy = (n - 1) / 2.0;
+      // fftshift zero-shift index from the thesis: floor(n/2).
+      const cx = Math.floor(n / 2);
+      const cy = Math.floor(n / 2);
       const items = [
         { name: "F+U", off: res.u_fin, color: "#ff9999" },
         { name: "F-U", off: [-res.u_fin[0], -res.u_fin[1]], color: "#ff9999" },
@@ -3375,6 +3861,78 @@
       ];
       // off is [dr, dc], canvas uses x=col, y=row
       return items.map((p) => ({ name: p.name, x: cx + p.off[1], y: cy + p.off[0], color: p.color }));
+    }
+
+    function runStableHexagonJS(fullPatch, patchSize, targetSize, displayX, displayY, theoreticalInfo) {
+      const kwargs = state.peakDetection;
+      const minPs = Math.max(16, Math.floor(kwargs.minPs ?? 40));
+      const maxPs = Math.min(Math.floor(kwargs.maxPs ?? patchSize), patchSize);
+      const step = Math.max(1, Math.floor(kwargs.step ?? 4));
+      const stableSeqLen = Math.max(2, Math.floor(kwargs.stableSeqLen ?? 3));
+      const stableTol = Number(kwargs.stableTol ?? 1.0);
+      let lastPts6 = null;
+      let runLen = 0;
+      const stable = [];
+      let best = null;
+      let bestD = Infinity;
+
+      function buildSubPatchFromFull(ps) {
+        const n = targetSize;
+        const out = new Float64Array(n * n);
+        const scale = ps / patchSize;
+        const halfN = n / 2;
+        let idx = 0;
+        for (let r = 0; r < n; r++) {
+          for (let c = 0; c < n; c++) {
+            const srcR = halfN + (r - halfN) * scale;
+            const srcC = halfN + (c - halfN) * scale;
+            out[idx++] = samplePatchBilinear(fullPatch, n, srcR, srcC);
+          }
+        }
+        let mean = 0;
+        for (let i = 0; i < out.length; i++) mean += out[i];
+        mean /= Math.max(out.length, 1);
+        for (let i = 0; i < out.length; i++) out[i] -= mean;
+        return out;
+      }
+
+      for (let ps = minPs; ps <= maxPs; ps += step) {
+        const patch = buildSubPatchFromFull(ps);
+        const ac = computeAutocorrelation2D(patch, targetSize);
+        const res = findHexagonJS(ac, targetSize, kwargs, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
+        if (!res) {
+          lastPts6 = null;
+          runLen = 0;
+          stable.length = 0;
+          continue;
+        }
+        const pts6 = res.hex6_centered.map((o) => [o[1], o[0]]); // [dc, dr]
+        if (lastPts6) {
+          let dmax = 0;
+          for (let i = 0; i < 6; i++) {
+            dmax = Math.max(dmax, Math.hypot(pts6[i][0] - lastPts6[i][0], pts6[i][1] - lastPts6[i][1]));
+          }
+          if (dmax < bestD) {
+            bestD = dmax;
+            best = res;
+          }
+          if (dmax <= stableTol) {
+            runLen += 1;
+            stable.push(res);
+            if (runLen >= stableSeqLen) return res;
+          } else {
+            runLen = 1;
+            stable.length = 0;
+            stable.push(res);
+          }
+        } else {
+          runLen = 1;
+          stable.length = 0;
+          stable.push(res);
+        }
+        lastPts6 = pts6;
+      }
+      return best;
     }
 
     function samplePatchBilinear(patch, n, r, c) {
@@ -3433,567 +3991,6 @@
         );
       }
     }
-
-    function renderAutocorrelationAt(x, y) {
-      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
-
-      const patchSize = state.patchSize;
-      const computeSize = patchSize;
-      const cx = x;
-      const cy = y;
-
-      const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, patchSize, computeSize);
-      const ac = computeAutocorrelation2D(patch, computeSize);
-      const displayField = state.displayMode === "laplacian" ? computeLaplacian2D(ac, computeSize, computeSize) : ac;
-      const contrasted01 = applyDisplayContrastRobust(displayField, computeSize, computeSize, state.previewContrast, state.displayMode);
-      const gray = float01ToUint8(contrasted01);
-      const img = createImageDataFromGray(gray, computeSize, computeSize);
-
-      const tempCanvas = document.createElement("canvas");
-      tempCanvas.width = computeSize;
-      tempCanvas.height = computeSize;
-      const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
-      tempCtx.putImageData(img, 0, 0);
-
-      acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
-      acorrCtx.imageSmoothingEnabled = false;
-      acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
-      drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
-
-      if (state.peaksEnabled) {
-        // Detection stage only. Do NOT run affinity assignment / phase correlation here:
-        // it is expensive and, according to the thesis workflow, belongs to the
-        // explicit Validate Affinity step.
-        const detection = findHexagonJS(ac, computeSize, state.peakDetection);
-        state.lastDetection = detection;
-        state.lastAffinityEstimate = null;
-        if (detection && detection.u_fin && detection.v_fin && detection.w_fin) {
-          setValidationMessage(`Peaks ready (${detection.method || state.peakDetection.refinementMethod}) - click Validate Affinity`);
-        } else {
-          setValidationMessage("No valid hexagon detected - adjust the patch and detect again");
-        }
-        refreshRectificationUI();
-        const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
-        drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
-      }
-
-      if (!state.peaksEnabled) {
-        state.lastDetection = null;
-        state.lastAffinityEstimate = null;
-        refreshRectificationUI();
-      }
-
-      if (acorrModeLabel) {
-        acorrModeLabel.textContent = state.displayMode === "laplacian" ? "Laplacian of Autocorrelation" : "Autocorrelation";
-      }
-      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${patchSize} px`;
-      if (patchSizeInline) patchSizeInline.textContent = patchSize;
-      redrawMainCanvas();
-    }
-
-
-    // =========================================================
-    // SAVE VALIDATED PEAK DETAILS
-    // =========================================================
-    function roundNumberForExport(v, digits = 6) {
-      if (!Number.isFinite(v)) return null;
-      const f = Math.pow(10, digits);
-      return Math.round(v * f) / f;
-    }
-
-    function exportVec2(v, digits = 6) {
-      if (!v || v.length < 2) return null;
-      return [roundNumberForExport(Number(v[0]), digits), roundNumberForExport(Number(v[1]), digits)];
-    }
-
-    function exportPoint(p, digits = 6) {
-      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
-      return {
-        x: roundNumberForExport(p.x, digits),
-        y: roundNumberForExport(p.y, digits)
-      };
-    }
-
-    function exportMat2(M, digits = 6) {
-      if (!M || !M[0] || !M[1]) return null;
-      return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
-    }
-
-    function exportVec3(v, digits = 6) {
-      if (!v || v.length < 3) return null;
-      return [
-        roundNumberForExport(Number(v[0]), digits),
-        roundNumberForExport(Number(v[1]), digits),
-        roundNumberForExport(Number(v[2]), digits)
-      ];
-    }
-
-    function exportMat3(M, digits = 6) {
-      if (!M || !M[0] || !M[1] || !M[2]) return null;
-      return [
-        exportVec3(M[0], digits),
-        exportVec3(M[1], digits),
-        exportVec3(M[2], digits)
-      ];
-    }
-
-    function exportSafeNumber(value, digits = 6) {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return null;
-      return roundNumberForExport(n, digits);
-    }
-
-    function filenameSafeNumber(value, digits = 3) {
-      const n = Number(value);
-      if (!Number.isFinite(n)) return 'na';
-      return n.toFixed(digits).replace('-', 'm').replace('.', 'p');
-    }
-
-    function sanitizeFilenamePart(str) {
-      return String(str).trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_');
-    }
-
-    function getCurrentDeformationParameters() {
-      if (state.testMode === 'real') {
-        return {
-          mode: 'Real image',
-          parameters: {
-            real_shift_u_x_px: exportSafeNumber(state.realShifts.uX),
-            real_shift_u_y_px: exportSafeNumber(state.realShifts.uY),
-            real_shift_v_x_px: exportSafeNumber(state.realShifts.vX),
-            real_shift_v_y_px: exportSafeNumber(state.realShifts.vY)
-          }
-        };
-      }
-      const mode = state.projectionModes[state.projectionIndex] || 'Unknown';
-      if (mode === 'Affine') {
-        return {
-          mode,
-          parameters: {
-            rotation_z_deg: exportSafeNumber(state.affine.rotationDeg),
-            scale_x: exportSafeNumber(state.affine.scaleX),
-            scale_y: exportSafeNumber(state.affine.scaleY),
-            shear_x: exportSafeNumber(state.affine.shearX),
-            shear_y: exportSafeNumber(state.affine.shearY)
-          }
-        };
-      }
-      if (mode === 'Perspective') {
-        return {
-          mode,
-          parameters: {
-            angle_vue_x_deg: exportSafeNumber(state.perspective.angleViewXDeg),
-            angle_vue_y_deg: exportSafeNumber(state.perspective.angleViewYDeg),
-            focal: exportSafeNumber(state.perspective.focal)
-          }
-        };
-      }
-      if (mode === 'Cylindrical') {
-        return {
-          mode,
-          parameters: {
-            angular_span: exportSafeNumber(state.cylindrical.curvature),
-            camera_distance: exportSafeNumber(state.cylindrical.perspectiveDrop),
-            camera_roll_deg: exportSafeNumber(state.cylindrical.zRotationDeg),
-            label_height: exportSafeNumber(state.cylindrical.verticalStretch)
-          }
-        };
-      }
-      if (mode === 'Shoulder') {
-        return {
-          mode,
-          parameters: {
-            angular_span: exportSafeNumber(state.shoulder.angularSpan),
-            camera_distance: exportSafeNumber(state.shoulder.cameraDistance),
-            neck_radius: exportSafeNumber(state.shoulder.neckRadius),
-            shoulder_length: exportSafeNumber(state.shoulder.shoulderLength),
-            camera_roll_deg: exportSafeNumber(state.shoulder.zRotationDeg),
-            label_height: exportSafeNumber(state.shoulder.verticalStretch)
-          }
-        };
-      }
-      if (mode === 'Crumpled') {
-        return {
-          mode,
-          parameters: {
-            crumple_amplitude: exportSafeNumber(state.crumpled.amplitude),
-            crease_frequency: exportSafeNumber(state.crumpled.frequency),
-            perspective: exportSafeNumber(state.crumpled.perspective),
-            camera_roll_deg: exportSafeNumber(state.crumpled.zRotationDeg),
-            twist: exportSafeNumber(state.crumpled.twist),
-            shading: exportSafeNumber(state.crumpled.shade)
-          }
-        };
-      }
-      if (mode === 'Two Planes') {
-        return {
-          mode,
-          parameters: {
-            angle_between_planes_deg: exportSafeNumber(state.twoPlanes.foldAngleDeg),
-            angle_vue_x_deg: exportSafeNumber(state.twoPlanes.viewXDeg),
-            angle_vue_y_deg: exportSafeNumber(state.twoPlanes.viewYDeg),
-            angle_vue_z_deg: exportSafeNumber(state.twoPlanes.viewZDeg),
-            focal_scale: exportSafeNumber(state.twoPlanes.focalScale),
-            camera_distance: exportSafeNumber(state.twoPlanes.cameraDistance)
-          }
-        };
-      }
-      return { mode, parameters: {} };
-    }
-
-    function buildDeformationFilenameBase() {
-      const deform = getCurrentDeformationParameters();
-      const parts = ['deformation', sanitizeFilenamePart(deform.mode).toLowerCase()];
-      Object.entries(deform.parameters || {}).forEach(([key, value]) => {
-        if (value === null || value === undefined) return;
-        parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
-      });
-      return parts.join('__');
-    }
-
-    function computeMeanGray(imageData) {
-      if (!imageData || !imageData.data || !imageData.data.length) return 255;
-      let s = 0.0;
-      const n = imageData.width * imageData.height;
-      for (let i = 0; i < imageData.data.length; i += 4) s += imageData.data[i];
-      return s / Math.max(1, n);
-    }
-
-    function mat2DifferenceFroJS(A, B) {
-      if (!A || !B) return null;
-      return Math.sqrt(
-        (A[0][0]-B[0][0])**2 + (A[0][1]-B[0][1])**2 +
-        (A[1][0]-B[1][0])**2 + (A[1][1]-B[1][1])**2
-      );
-    }
-
-    // Evaluation-only geometric metrics. These functions never feed the estimator.
-    function computeHomographyTransferMetrics200x200(Htrue, Hestimated) {
-      if (!Htrue || !Hestimated) return null;
-      const Gtrue = invert3x3(Htrue);
-      const Gest = invert3x3(Hestimated);
-      if (!Gtrue || !Gest) return null;
-      const crop = Math.min(200, state.size, state.size);
-      const x0 = Math.floor((state.size - crop) / 2);
-      const y0 = Math.floor((state.size - crop) / 2);
-      let n=0, sf=0, sf2=0, mf=0, sb=0, sb2=0, mb=0, ss=0, ss2=0, ms=0;
-      for (let y=y0; y<y0+crop; y++) for (let x=x0; x<x0+crop; x++) {
-        const yt=applyHomographyPoint(Htrue,[x,y]);
-        const ye=applyHomographyPoint(Hestimated,[x,y]);
-        if (!yt || !ye) continue;
-        const ef=Math.hypot(ye[0]-yt[0],ye[1]-yt[1]);
-        const xb=applyHomographyPoint(Gest,yt);
-        if (!xb) continue;
-        const eb=Math.hypot(xb[0]-x,xb[1]-y);
-        const es=Math.sqrt(ef*ef+eb*eb);
-        if (![ef,eb,es].every(Number.isFinite)) continue;
-        sf+=ef;sf2+=ef*ef;mf=Math.max(mf,ef);
-        sb+=eb;sb2+=eb*eb;mb=Math.max(mb,eb);
-        ss+=es;ss2+=es*es;ms=Math.max(ms,es);n++;
-      }
-      return {
-        crop_size_px:crop, compared_pixels:n,
-        forward_mean_px:sf/Math.max(1,n), forward_rmse_px:Math.sqrt(sf2/Math.max(1,n)), forward_max_px:mf,
-        backward_mean_px:sb/Math.max(1,n), backward_rmse_px:Math.sqrt(sb2/Math.max(1,n)), backward_max_px:mb,
-        symmetric_mean_px:ss/Math.max(1,n), symmetric_rmse_px:Math.sqrt(ss2/Math.max(1,n)), symmetric_max_px:ms
-      };
-    }
-
-    function computeCornerTransferMetricsJS(Htrue,Hestimated) {
-      if (!Htrue || !Hestimated) return null;
-      const pts=[[0,0],[state.size-1,0],[state.size-1,state.size-1],[0,state.size-1]];
-      const errors=pts.map(p=>{
-        const a=applyHomographyPoint(Htrue,p),b=applyHomographyPoint(Hestimated,p);
-        return Math.hypot(a[0]-b[0],a[1]-b[1]);
-      });
-      return {errors_px:errors,mean_px:meanFiniteJS(errors),max_px:Math.max(...errors)};
-    }
-
-    function computePhotometricRectificationMetrics200x200JS() {
-      if (!state.sourceImageData || !state.rectificationImageData) return null;
-      const crop=Math.min(200,state.size,state.size),x0=Math.floor((state.size-crop)/2),y0=Math.floor((state.size-crop)/2);
-      let n=0,s=0,s2=0,m=0;
-      for(let y=y0;y<y0+crop;y++)for(let x=x0;x<x0+crop;x++){
-        const i=(y*state.size+x)*4;
-        const d=Math.abs(Number(state.sourceImageData.data[i])-Number(state.rectificationImageData.data[i]));
-        if(!Number.isFinite(d))continue;s+=d;s2+=d*d;m=Math.max(m,d);n++;
-      }
-      return {crop_size_px:crop,compared_pixels:n,mae_gray:s/Math.max(1,n),rmse_gray:Math.sqrt(s2/Math.max(1,n)),max_abs_gray:m};
-    }
-
-    function computeTrueDeformationHomographySourceToDisplayed() {
-      if (state.testMode === 'real') return null;
-      const mode = state.projectionModes[state.projectionIndex];
-      const w = state.size;
-      const h = state.size;
-      if (mode === 'Affine') {
-        const cx = w / 2;
-        const cy = h / 2;
-        const zRot = degToRad(state.affine.rotationDeg);
-        const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
-        const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
-        const M = [
-          [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
-          [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
-        ];
-        return [
-          [M[0][0], M[0][1], cx - (M[0][0] * cx + M[0][1] * cy)],
-          [M[1][0], M[1][1], cy - (M[1][0] * cx + M[1][1] * cy)],
-          [0.0, 0.0, 1.0]
-        ];
-      }
-      if (mode === 'Perspective') {
-        const hom = buildPerspectiveHomography(w, h);
-        return hom ? hom.H : null;
-      }
-      return null;
-    }
-
-    function computeEstimatedDeformationHomographySourceToDisplayed() {
-      return state.globalHomography ? invert3x3(state.globalHomography) : null;
-    }
-
-    function makePeakPositionExport(item) {
-      const detection = item && item.detection ? item.detection : null;
-      const patchSize = Number(item && item.patchSize ? item.patchSize : state.patchSize);
-      const computeSize = patchSize;
-      const scale = patchSize / computeSize;
-      const cxCompute = (computeSize - 1) / 2.0;
-      const cyCompute = (computeSize - 1) / 2.0;
-      const cxPatch = (patchSize - 1) / 2.0;
-      const cyPatch = (patchSize - 1) / 2.0;
-
-      if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
-        return {
-          compute_size: computeSize,
-          patch_size: patchSize,
-          scale_patch_over_compute: roundNumberForExport(scale),
-          peaks: []
-        };
-      }
-
-      const shiftDefs = [
-        { label: "+U", rc: detection.u_fin },
-        { label: "-U", rc: [-detection.u_fin[0], -detection.u_fin[1]] },
-        { label: "+V", rc: detection.v_fin },
-        { label: "-V", rc: [-detection.v_fin[0], -detection.v_fin[1]] },
-        { label: "+W = +(U-V)", rc: detection.w_fin },
-        { label: "-W = -(U-V)", rc: [-detection.w_fin[0], -detection.w_fin[1]] }
-      ];
-
-      const peaks = shiftDefs.map((p) => {
-        const rowShift = Number(p.rc[0]);
-        const colShift = Number(p.rc[1]);
-        const dxCompute = colShift;
-        const dyCompute = rowShift;
-        const dxPatch = dxCompute * scale;
-        const dyPatch = dyCompute * scale;
-        return {
-          label: p.label,
-          shift_rc_compute_px: [roundNumberForExport(rowShift), roundNumberForExport(colShift)],
-          shift_xy_compute_px: [roundNumberForExport(dxCompute), roundNumberForExport(dyCompute)],
-          position_xy_in_autocorr_compute_px: {
-            x: roundNumberForExport(cxCompute + dxCompute),
-            y: roundNumberForExport(cyCompute + dyCompute)
-          },
-          shift_xy_patch_px: [roundNumberForExport(dxPatch), roundNumberForExport(dyPatch)],
-          position_xy_in_patch_scale_px: {
-            x: roundNumberForExport(cxPatch + dxPatch),
-            y: roundNumberForExport(cyPatch + dyPatch)
-          }
-        };
-      });
-
-      return {
-        compute_size: computeSize,
-        patch_size: patchSize,
-        scale_patch_over_compute: roundNumberForExport(scale),
-        center_autocorr_compute_px: {
-          x: roundNumberForExport(cxCompute),
-          y: roundNumberForExport(cyCompute)
-        },
-        center_patch_scale_px: {
-          x: roundNumberForExport(cxPatch),
-          y: roundNumberForExport(cyPatch)
-        },
-        peaks
-      };
-    }
-
-    function makeValidatedPeaksExportPayload() {
-      const refs = getTextureShiftVectorsSourcePx();
-      const U = refs.U;
-      const V = refs.V;
-      const W = [U[0] - V[0], U[1] - V[1]];
-      const deform = getCurrentDeformationParameters();
-
-      return {
-        export_version: 3,
-        created_at: new Date().toISOString(),
-        image_size_px: {
-          width: state.size,
-          height: state.size
-        },
-        projection_mode: deform.mode,
-        deformation_parameters: deform.parameters,
-        texture_parameters: {
-          black_occupancy: state.texture.occupancy,
-          dilation_radius: state.texture.dilation,
-          shift_angle_deg: state.texture.angleShiftDeg,
-          shift_norm_px: state.texture.normShift,
-          gaussian_blur_sigma: state.texture.blurSigma,
-          real_mode_shifts_xy_px: {
-            U: exportVec2([state.realShifts.uX, state.realShifts.uY]),
-            V: exportVec2([state.realShifts.vX, state.realShifts.vY]),
-            note: state.testMode === 'real'
-              ? 'These manually entered shifts are used for real-mode affinity estimation and rectification.'
-              : 'Synthetic mode uses shift_angle_deg and shift_norm_px.'
-          }
-        },
-        original_shifts_source_px: {
-          convention: 'xy, in the undeformed/source texture',
-          U: exportVec2(U),
-          V: exportVec2(V),
-          W_U_minus_V: exportVec2(W),
-          minus_U: exportVec2([-U[0], -U[1]]),
-          minus_V: exportVec2([-V[0], -V[1]]),
-          minus_W: exportVec2([-W[0], -W[1]])
-        },
-        rectification_details: {
-          validated_affinities_count: state.validatedAffinities.length,
-          rectification_enabled: Boolean(state.rectificationEnabled),
-          has_rectification_image: Boolean(state.rectificationImageData),
-          rectification_solver_info: state.globalHomographyInfo || null
-        },
-        validated_count: state.validatedAffinities.length,
-        validated_patches: state.validatedAffinities.map((item, idx) => ({
-          id: idx + 1,
-          deformed_patch_center_xy: exportPoint(item.center),
-          matched_reference_center_xy: exportPoint(item.referenceCenter),
-          seed_reference_center_xy: exportPoint(item.referenceCenterSeed),
-          patch_size_px: item.patchSize || state.patchSize,
-          selected_pair: item.pairName || null,
-          selected_pair_indices_in_ordered_hexagon: item.pairIndices || null,
-          assignment_mode: item.assignmentMode || null,
-          order_preserving_cyclic_shift: item.orderShift === undefined ? null : item.orderShift,
-          order_preserving_assignment: item.assignment || null,
-          phase_correlation_score: roundNumberForExport(item.phaseScore),
-          found_shifts_selected_xy_patch_px: {
-            Uobs: exportVec2(item.Uobs),
-            Vobs: exportVec2(item.Vobs)
-          },
-          original_shifts_used_for_affinity_xy_source_px: {
-            Uref: exportVec2(item.Uref),
-            Vref: exportVec2(item.Vref)
-          },
-          local_forward_affinity_M_source_to_deformed: exportMat2(item.M),
-          local_rectification_A_inverse_deformed_to_source: exportMat2(item.Arect),
-          reference_phase_peak_xy: exportVec2(item.referencePeakXY),
-          reference_shift_xy: exportVec2(item.referenceShiftXY),
-          detected_hexagon: makePeakPositionExport(item),
-          detection_quality: item.detection ? {
-            energy: roundNumberForExport(item.detection.energy ?? item.detection.E ?? item.detection.e_fin),
-            score: roundNumberForExport(item.detection.score),
-            ok: item.detection.ok === undefined ? null : Boolean(item.detection.ok)
-          } : null
-        }))
-      };
-    }
-
-    function downloadTextFile(filename, text, mimeType = 'application/json') {
-      const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      window.setTimeout(() => {
-        a.click();
-        window.setTimeout(() => {
-          URL.revokeObjectURL(url);
-          if (a.parentNode) a.parentNode.removeChild(a);
-        }, 500);
-      }, 0);
-    }
-
-    function saveValidatedPeaksDetails() {
-      if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage('No validated peak to save. Validate at least one affinity first.');
-        return;
-      }
-      const payload = makeValidatedPeaksExportPayload();
-      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const baseName = buildDeformationFilenameBase();
-      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
-      downloadTextFile(filename, JSON.stringify(payload, null, 2), 'application/json');
-      setValidationMessage(`Download started: ${filename}`);
-    }
-
-    // =========================================================
-    // PARAMETER ACTIONS
-    // =========================================================
-    function resetAllParams() {
-      state.testMode = "synthetic";
-      updateTestModeUI();
-      state.texture = { ...DEFAULTS.texture };
-      state.realShifts = { ...DEFAULTS.realShifts };
-      state.affine = { ...DEFAULTS.affine };
-      state.perspective = { ...DEFAULTS.perspective };
-      state.cylindrical = { ...DEFAULTS.cylindrical };
-      state.shoulder = { ...DEFAULTS.shoulder };
-      state.crumpled = { ...DEFAULTS.crumpled };
-      state.twoPlanes = { ...DEFAULTS.twoPlanes };
-      state.patchSize = 90;
-      state.previewContrast = 2.2;
-      state.displayMode = "autocorr";
-      state.peaksEnabled = false;
-      state.projectionIndex = 0;
-      state.lockedPatch = false;
-      state.mouseX = state.size / 2;
-      state.mouseY = state.size / 2;
-      state.lockedPatchX = state.mouseX;
-      state.lockedPatchY = state.mouseY;
-      state.lastDetection = null;
-      state.lastAffinityEstimate = null;
-      state.validatedAffinities = [];
-      state.rectificationEnabled = false;
-      state.differenceEnabled = false;
-      state.rectificationImageData = null;
-      state.differenceImageData = null;
-      state.rectificationTransform = null;
-      state.globalHomography = null;
-      state.globalHomographyInfo = null;
-      state.triangulationEnabled = false;
-      state.triangulationData = null;
-      syncControlsFromState();
-      renderGeneratedTexture();
-      if (state.autocorrEnabled) {
-        const p = getActivePatchCenter();
-        renderAutocorrelationAt(p.x, p.y);
-      } else {
-        redrawMainCanvas();
-      }
-    }
-
-    function updatePreviewContrast(delta) {
-      state.previewContrast = clamp(Math.round((state.previewContrast + delta) * 10) / 10, 0.2, 8.0);
-      if (contrastSlider) contrastSlider.value = String(state.previewContrast);
-      refreshControlLabels();
-      if (state.autocorrEnabled) schedulePreviewRender();
-    }
-
-    function cycleProjectionMode() {
-      state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
-      refreshProjectionPanels();
-      applyCurrentProjection();
-    }
-
-
-    // =========================================================
-    // THESIS-CANONICAL OVERRIDES
-    // these_ismail.tex is the normative specification.
-    // =========================================================
 
     function isPowerOfTwoInt(n) {
       n = Math.floor(n);
@@ -4189,109 +4186,862 @@
       if(!best)return null;return{u_fin:best.u,v_fin:best.v,w_fin:best.w,energy_final:best.score,score:best.score,ok:true,method:best.method,pair_indices:best.pairIndices,integer_candidates:candidates,hex6_centered:[best.u,[-best.u[0],-best.u[1]],best.v,[-best.v[0],-best.v[1]],best.w,[-best.w[0],-best.w[1]]],joint_diagnostics:best.diagnostics};
     }
 
-    // ---------------- 8-DOF homography: positions + Jacobians ----------------
-    function thetaToHomography8JS(t){return[[t[0],t[1],t[2]],[t[3],t[4],t[5]],[t[6],t[7],1.0]];}
-    function homographyFromPointPairsLSJS(src,dst){if(src.length<4)return null;const p=8,ATA=Array.from({length:p},()=>new Array(p).fill(0)),ATb=new Array(p).fill(0);for(let i=0;i<src.length;i++){const x=src[i][0],y=src[i][1],u=dst[i][0],v=dst[i][1],rows=[[x,y,1,0,0,0,-u*x,-u*y],[0,0,0,x,y,1,-v*x,-v*y]],bs=[u,v];for(let rr=0;rr<2;rr++)for(let a=0;a<p;a++){ATb[a]+=rows[rr][a]*bs[rr];for(let b=0;b<p;b++)ATA[a][b]+=rows[rr][a]*rows[rr][b];}}for(let i=0;i<p;i++)ATA[i][i]+=1e-10;const t=solveLinearSystem(ATA,ATb);return t?thetaToHomography8JS(t):null;}
-    function jointHomographyResidualJS(theta,items,sigmaX=1.0,sigmaJ=0.05,lambdaJ=1.0){const G=thetaToHomography8JS(theta),out=[];for(const item of items){const y=[item.center.x,item.center.y],x=[item.referenceCenter.x,item.referenceCenter.y],B=item.Arect;let gx;try{gx=applyHomographyPoint(G,y);}catch(e){gx=[1e6,1e6];}out.push((gx[0]-x[0])/sigmaX,(gx[1]-x[1])/sigmaX);try{const J=jacobianHomographyAtInput(G,y[0],y[1]),s=Math.sqrt(lambdaJ)/sigmaJ;out.push(s*(J[0][0]-B[0][0]),s*(J[0][1]-B[0][1]),s*(J[1][0]-B[1][0]),s*(J[1][1]-B[1][1]));}catch(e){out.push(1e6,1e6,1e6,1e6);}}return out;}
-    function optimizeJointHomographyFromValidatedJS(items,maxIter=120){const src=items.map(i=>[i.center.x,i.center.y]),dst=items.map(i=>[i.referenceCenter.x,i.referenceCenter.y]);const G0=homographyFromPointPairsLSJS(src,dst);if(!G0)return null;let x=[G0[0][0],G0[0][1],G0[0][2],G0[1][0],G0[1][1],G0[1][2],G0[2][0],G0[2][1]],lambda=1e-3;const sigmaX=1.0,sigmaJ=0.05,lambdaJ=1.0,deltaHuber=2.0;let r=jointHomographyResidualJS(x,items,sigmaX,sigmaJ,lambdaJ),cost=Infinity,itDone=0;const robustCost=a=>a.reduce((s,v)=>{const av=Math.abs(v);return s+(av<=deltaHuber?0.5*v*v:deltaHuber*(av-0.5*deltaHuber));},0)/Math.max(1,a.length);cost=robustCost(r);for(let it=0;it<maxIter;it++){itDone=it+1;const m=r.length,pn=8,J=Array.from({length:m},()=>new Array(pn).fill(0));for(let j=0;j<pn;j++){const eps=1e-6*Math.max(1,Math.abs(x[j])),xp=x.slice(),xm=x.slice();xp[j]+=eps;xm[j]-=eps;const rp=jointHomographyResidualJS(xp,items,sigmaX,sigmaJ,lambdaJ),rm=jointHomographyResidualJS(xm,items,sigmaX,sigmaJ,lambdaJ);for(let i=0;i<m;i++)J[i][j]=(rp[i]-rm[i])/(2*eps);}const ATA=Array.from({length:pn},()=>new Array(pn).fill(0)),ATr=new Array(pn).fill(0);for(let i=0;i<m;i++){const av=Math.abs(r[i]),w=av<=deltaHuber?1:deltaHuber/Math.max(av,1e-12);for(let a=0;a<pn;a++){ATr[a]+=w*J[i][a]*r[i];for(let b=0;b<pn;b++)ATA[a][b]+=w*J[i][a]*J[i][b];}}for(let a=0;a<pn;a++)ATA[a][a]+=lambda;const d=solveLinearSystem(ATA,ATr.map(v=>-v));if(!d)break;const xt=x.map((v,i)=>v+d[i]),rt=jointHomographyResidualJS(xt,items,sigmaX,sigmaJ,lambdaJ),ct=robustCost(rt);if(ct<cost){x=xt;r=rt;cost=ct;lambda*=0.6;if(Math.sqrt(d.reduce((s,v)=>s+v*v,0))<1e-8)break;}else lambda*=2.5;}
-      return{H_3x3:thetaToHomography8JS(x),cost,info:{success:true,iterations:itDone,model:"8DOF_positions_plus_jacobians",robust_loss:"Huber",sigma_x_px:sigmaX,sigma_J:sigmaJ,lambda_J:lambdaJ,uses_ground_truth:false}};}
+    function renderAutocorrelationAt(x, y) {
+      if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
 
-    // ---------------- Robustness recording: GT is evaluation-only ----------------
-    // IMPORTANT: every function below this boundary may read the synthetic ground truth
-    // ONLY after local affinities and the global homography have already been estimated.
-    // No value computed here is allowed to feed peak detection, joint refinement,
-    // affinity assignment, phase-correlation selection, or homography optimization.
-    const ROBUSTNESS_STORAGE_KEY="phd_homography_robustness_v1";
-    function normalizeH33JS(H){if(!H)return null;const s=Math.abs(H[2][2])>1e-12?H[2][2]:1;return H.map(row=>row.map(v=>v/s));}
-    function frobMat3DiffJS(A,B){if(!A||!B)return null;const a=normalizeH33JS(A),b=normalizeH33JS(B);let s0=0;for(let i=0;i<3;i++)for(let j=0;j<3;j++){const d=a[i][j]-b[i][j];s0+=d*d;}return Math.sqrt(s0);}
-    function localGtComparisonForItemJS(item,Htrue,Gtrue,Hestimated,Gestimated){
-      const y=[item.center.x,item.center.y];
-      const xgt=applyHomographyPoint(Gtrue,y);
-      const JHgt=jacobianHomographyAtInput(Htrue,xgt[0],xgt[1]);
-      const JGgt=jacobianHomographyAtInput(Gtrue,y[0],y[1]);
-      const Aest=item.M, Best=item.Arect;
-      const eAf=mat2DifferenceFroJS(Aest,JHgt);
-      const eBi=mat2DifferenceFroJS(Best,JGgt);
-      let eGH=null,eGG=null;
-      if(Hestimated) eGH=mat2DifferenceFroJS(jacobianHomographyAtInput(Hestimated,xgt[0],xgt[1]),JHgt);
-      if(Gestimated) eGG=mat2DifferenceFroJS(jacobianHomographyAtInput(Gestimated,y[0],y[1]),JGgt);
+      const patchSize = state.patchSize;
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const cx = x;
+      const cy = y;
+
+      const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, patchSize, computeSize);
+      const ac = computeAutocorrelation2D(patch, computeSize);
+      const displayField = state.displayMode === "laplacian"
+        ? computeLaplacian2D(ac, computeSize, computeSize)
+        : ac;
+      const contrasted01 = applyDisplayContrastRobust(
+        displayField, computeSize, computeSize, state.previewContrast, state.displayMode
+      );
+      const gray = float01ToUint8(contrasted01);
+      const img = createImageDataFromGray(gray, computeSize, computeSize);
+
+      const tempCanvas = document.createElement("canvas");
+      tempCanvas.width = computeSize;
+      tempCanvas.height = computeSize;
+      const tempCtx = tempCanvas.getContext("2d", { willReadFrequently: true });
+      tempCtx.putImageData(img, 0, 0);
+
+      acorrCtx.clearRect(0, 0, acorrCanvas.width, acorrCanvas.height);
+      acorrCtx.imageSmoothingEnabled = false;
+      acorrCtx.drawImage(tempCanvas, 0, 0, acorrCanvas.width, acorrCanvas.height);
+      drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
+
+      if (state.peaksEnabled) {
+        // Persistent Detect Peaks mode: wheel/slider changes schedule another call here.
+        // No GT/Jacobian is read in this path.
+        const detection = findHexagonJS(ac, computeSize, state.peakDetection);
+        state.lastDetection = detection;
+        state.lastAffinityEstimate = null; // only Validate Affinity computes/selects A
+        const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
+        drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
+      } else {
+        state.lastDetection = null;
+        state.lastAffinityEstimate = null;
+      }
+
+      refreshRectificationUI();
+      if (acorrModeLabel) {
+        acorrModeLabel.textContent = state.displayMode === "laplacian"
+          ? "Laplacian of Autocorrelation"
+          : "Autocorrelation";
+      }
+      if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${patchSize} px`;
+      if (patchSizeInline) patchSizeInline.textContent = patchSize;
+      redrawMainCanvas();
+    }
+
+    function roundNumberForExport(v, digits = 6) {
+      if (!Number.isFinite(v)) return null;
+      const f = Math.pow(10, digits);
+      return Math.round(v * f) / f;
+    }
+
+    function exportVec2(v, digits = 6) {
+      if (!v || v.length < 2) return null;
+      return [roundNumberForExport(Number(v[0]), digits), roundNumberForExport(Number(v[1]), digits)];
+    }
+
+    function exportPoint(p, digits = 6) {
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
       return {
-        center_deformed_xy:y,
-        center_reference_gt_xy:xgt,
-        center_reference_phase_xy:item.referenceCenter?[item.referenceCenter.x,item.referenceCenter.y]:null,
-        patch_size_px:item.patchSize,
-        refinement_method:item.detection?.method||state.peakDetection.refinementMethod,
-        A_est_source_to_deformed:Aest,
-        JH_gt_source_to_deformed:JHgt,
-        B_est_deformed_to_source:Best,
-        JG_gt_deformed_to_source:JGgt,
-        local_forward_affinity_fro_error:eAf,
-        local_forward_affinity_relative_fro_error:eAf/(mat2Frobenius(JHgt)+1e-12),
-        local_inverse_affinity_fro_error:eBi,
-        local_inverse_affinity_relative_fro_error:eBi/(mat2Frobenius(JGgt)+1e-12),
-        global_forward_jacobian_fro_error:eGH,
-        global_inverse_jacobian_fro_error:eGG,
-        phase_score:item.phaseScore,
-        phase_ratio:item.phaseRatioToSecond,
-        cyclic_shift:item.orderShift,
-        hexagon_residual_relative:item.residualRelative,
-        affinity_condition_number:item.conditionNumber,
-        affinity_determinant:item.det
+        x: roundNumberForExport(p.x, digits),
+        y: roundNumberForExport(p.y, digits)
       };
     }
 
-    function recordCurrentHomographyRobustnessTest(){
-      if(state.testMode!=="synthetic"||state.projectionModes[state.projectionIndex]!=="Perspective"){
-        setValidationMessage("Robustness record requires synthetic Perspective mode");return;
+    function exportMat2(M, digits = 6) {
+      if (!M || !M[0] || !M[1]) return null;
+      return [exportVec2(M[0], digits), exportVec2(M[1], digits)];
+    }
+
+    function exportVec3(v, digits = 6) {
+      if (!v || v.length < 3) return null;
+      return [
+        roundNumberForExport(Number(v[0]), digits),
+        roundNumberForExport(Number(v[1]), digits),
+        roundNumberForExport(Number(v[2]), digits)
+      ];
+    }
+
+    function exportMat3(M, digits = 6) {
+      if (!M || !M[0] || !M[1] || !M[2]) return null;
+      return [
+        exportVec3(M[0], digits),
+        exportVec3(M[1], digits),
+        exportVec3(M[2], digits)
+      ];
+    }
+
+    function exportSafeNumber(value, digits = 6) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return null;
+      return roundNumberForExport(n, digits);
+    }
+
+    function filenameSafeNumber(value, digits = 3) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 'na';
+      return n.toFixed(digits).replace('-', 'm').replace('.', 'p');
+    }
+
+    function sanitizeFilenamePart(str) {
+      return String(str).trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_\-]/g, '_').replace(/_+/g, '_');
+    }
+
+    function getCurrentDeformationParameters() {
+      if (state.testMode === 'real') {
+        return {
+          mode: 'Real image',
+          parameters: {
+            real_shift_u_x_px: exportSafeNumber(state.realShifts.uX),
+            real_shift_u_y_px: exportSafeNumber(state.realShifts.uY),
+            real_shift_v_x_px: exportSafeNumber(state.realShifts.vX),
+            real_shift_v_y_px: exportSafeNumber(state.realShifts.vY)
+          }
+        };
       }
-      if(!state.globalHomography||state.validatedAffinities.length<4){
-        setValidationMessage("Estimate a homography from at least 4 validated patches first");return;
+      const mode = state.projectionModes[state.projectionIndex] || 'Unknown';
+      if (mode === 'Affine') {
+        return {
+          mode,
+          parameters: {
+            rotation_z_deg: exportSafeNumber(state.affine.rotationDeg),
+            scale_x: exportSafeNumber(state.affine.scaleX),
+            scale_y: exportSafeNumber(state.affine.scaleY),
+            shear_x: exportSafeNumber(state.affine.shearX),
+            shear_y: exportSafeNumber(state.affine.shearY)
+          }
+        };
       }
-      // Ground truth starts HERE, strictly after estimation.
-      const Htrue=computeTrueDeformationHomographySourceToDisplayed();
-      const Gtrue=Htrue?invert3x3(Htrue):null;
-      const Gestimated=state.globalHomography;
-      const Hestimated=computeEstimatedDeformationHomographySourceToDisplayed();
-      if(!Htrue||!Gtrue||!Hestimated){setValidationMessage("Ground-truth/evaluated homography unavailable");return;}
-      const locals=state.validatedAffinities.map(it=>localGtComparisonForItemJS(it,Htrue,Gtrue,Hestimated,Gestimated));
-      const transfer=computeHomographyTransferMetrics200x200(Htrue,Hestimated);
-      const corners=computeCornerTransferMetricsJS(Htrue,Hestimated);
-      const photometric=computePhotometricRectificationMetrics200x200JS();
-      const rec={
-        test_id:`H_${Date.now()}`,created_at:new Date().toISOString(),
-        angle_view_x_deg:Number(state.perspective.angleViewXDeg),angle_view_y_deg:Number(state.perspective.angleViewYDeg),
-        focal:Number(state.perspective.focal),refinement_method:String(state.peakDetection.refinementMethod),
-        tps_lambda:Number(state.peakDetection.tpsLambda),validated_patches:locals.length,
-        patch_sizes_px:locals.map(x=>x.patch_size_px),manual_patch_selection:true,automatic_multiscale_search:false,
-        true_H_source_to_deformed:Htrue,estimated_G_deformed_to_source:Gestimated,estimated_H_source_to_deformed:Hestimated,
-        homography_fro_error_full_normalized:frobMat3DiffJS(Htrue,Hestimated),
-        transfer_error_200x200:transfer,corner_transfer_error:corners,photometric_rectification_error_200x200:photometric,
-        mean_local_forward_affinity_fro_error:meanFiniteJS(locals.map(x=>x.local_forward_affinity_fro_error)),
-        mean_local_forward_affinity_relative_fro_error:meanFiniteJS(locals.map(x=>x.local_forward_affinity_relative_fro_error)),
-        mean_local_inverse_affinity_fro_error:meanFiniteJS(locals.map(x=>x.local_inverse_affinity_fro_error)),
-        mean_local_inverse_affinity_relative_fro_error:meanFiniteJS(locals.map(x=>x.local_inverse_affinity_relative_fro_error)),
-        mean_global_forward_jacobian_fro_error:meanFiniteJS(locals.map(x=>x.global_forward_jacobian_fro_error)),
-        mean_global_inverse_jacobian_fro_error:meanFiniteJS(locals.map(x=>x.global_inverse_jacobian_fro_error)),
-        local_comparisons:locals,solver_info:state.globalHomographyInfo
+      if (mode === 'Perspective') {
+        return {
+          mode,
+          parameters: {
+            angle_vue_x_deg: exportSafeNumber(state.perspective.angleViewXDeg),
+            angle_vue_y_deg: exportSafeNumber(state.perspective.angleViewYDeg),
+            focal: exportSafeNumber(state.perspective.focal)
+          }
+        };
+      }
+      if (mode === 'Cylindrical') {
+        return {
+          mode,
+          parameters: {
+            angular_span: exportSafeNumber(state.cylindrical.curvature),
+            camera_distance: exportSafeNumber(state.cylindrical.perspectiveDrop),
+            camera_roll_deg: exportSafeNumber(state.cylindrical.zRotationDeg),
+            label_height: exportSafeNumber(state.cylindrical.verticalStretch)
+          }
+        };
+      }
+      if (mode === 'Shoulder') {
+        return {
+          mode,
+          parameters: {
+            angular_span: exportSafeNumber(state.shoulder.angularSpan),
+            camera_distance: exportSafeNumber(state.shoulder.cameraDistance),
+            neck_radius: exportSafeNumber(state.shoulder.neckRadius),
+            shoulder_length: exportSafeNumber(state.shoulder.shoulderLength),
+            camera_roll_deg: exportSafeNumber(state.shoulder.zRotationDeg),
+            label_height: exportSafeNumber(state.shoulder.verticalStretch)
+          }
+        };
+      }
+      if (mode === 'Crumpled') {
+        return {
+          mode,
+          parameters: {
+            crumple_amplitude: exportSafeNumber(state.crumpled.amplitude),
+            crease_frequency: exportSafeNumber(state.crumpled.frequency),
+            perspective: exportSafeNumber(state.crumpled.perspective),
+            camera_roll_deg: exportSafeNumber(state.crumpled.zRotationDeg),
+            twist: exportSafeNumber(state.crumpled.twist),
+            shading: exportSafeNumber(state.crumpled.shade)
+          }
+        };
+      }
+      if (mode === 'Two Planes') {
+        return {
+          mode,
+          parameters: {
+            angle_between_planes_deg: exportSafeNumber(state.twoPlanes.foldAngleDeg),
+            angle_vue_x_deg: exportSafeNumber(state.twoPlanes.viewXDeg),
+            angle_vue_y_deg: exportSafeNumber(state.twoPlanes.viewYDeg),
+            angle_vue_z_deg: exportSafeNumber(state.twoPlanes.viewZDeg),
+            focal_scale: exportSafeNumber(state.twoPlanes.focalScale),
+            camera_distance: exportSafeNumber(state.twoPlanes.cameraDistance)
+          }
+        };
+      }
+      return { mode, parameters: {} };
+    }
+
+    function buildDeformationFilenameBase() {
+      const deform = getCurrentDeformationParameters();
+      const parts = ['deformation', sanitizeFilenamePart(deform.mode).toLowerCase()];
+      Object.entries(deform.parameters || {}).forEach(([key, value]) => {
+        if (value === null || value === undefined) return;
+        parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
+      });
+      return parts.join('__');
+    }
+
+    function normalizeHomography3x3(H) {
+      if (!H) return null;
+      const h33 = Number(H[2] && H[2][2]);
+      if (Number.isFinite(h33) && Math.abs(h33) > 1e-12) {
+        return H.map((row) => row.map((v) => v / h33));
+      }
+      let norm = 0.0;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) norm += Number(H[r][c]) * Number(H[r][c]);
+      }
+      norm = Math.sqrt(norm);
+      if (!Number.isFinite(norm) || norm < 1e-12) return H;
+      return H.map((row) => row.map((v) => v / norm));
+    }
+
+    function frobeniusErrorHomographyWithoutTranslationColumn(A, B) {
+      // Homographies are first normalized by H[2][2].
+      // Then we compare only the first two columns:
+      //
+      //   [ h11 h12 | h13 ]
+      //   [ h21 h22 | h23 ]
+      //   [ h31 h32 | h33 ]
+      //
+      // The translation column [h13, h23, h33]^T is ignored.
+      // The compared block is therefore:
+      //
+      //   [ h11 h12 ]
+      //   [ h21 h22 ]
+      //   [ h31 h32 ]
+      //
+      if (!A || !B) return null;
+      const A1 = normalizeHomography3x3(A);
+      const B1 = normalizeHomography3x3(B);
+
+      let s = 0.0;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 2; c++) {
+          const a = Number(A1[r][c]);
+          const b = Number(B1[r][c]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const d = a - b;
+          s += d * d;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function computeMeanGray(imageData) {
+      if (!imageData || !imageData.data || !imageData.data.length) return 255;
+      let s = 0.0;
+      const n = imageData.width * imageData.height;
+      for (let i = 0; i < imageData.data.length; i += 4) s += imageData.data[i];
+      return s / Math.max(1, n);
+    }
+
+    function computeGeometricDeformationError200x200(Htrue, Hestimated) {
+      if (!Htrue || !Hestimated) return null;
+
+      const crop = Math.min(200, state.size, state.size);
+      const x0 = Math.floor((state.size - crop) / 2);
+      const y0 = Math.floor((state.size - crop) / 2);
+
+      let n = 0;
+      let sum = 0.0;
+      let sumSq = 0.0;
+      let maxErr = 0.0;
+
+      for (let y = y0; y < y0 + crop; y++) {
+        for (let x = x0; x < x0 + crop; x++) {
+          const pTrue = applyHomographyPoint(Htrue, [x, y]);
+          const pEst = applyHomographyPoint(Hestimated, [x, y]);
+
+          if (!pTrue || !pEst) continue;
+          const dx = pEst[0] - pTrue[0];
+          const dy = pEst[1] - pTrue[1];
+          if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
+
+          const e = Math.sqrt(dx * dx + dy * dy);
+          sum += e;
+          sumSq += e * e;
+          maxErr = Math.max(maxErr, e);
+          n++;
+        }
+      }
+
+      return {
+        crop_size_px: crop,
+        crop_origin_xy_in_source_image: { x: x0, y: y0 },
+        compared_pixels: n,
+        mean_transfer_error_px: roundNumberForExport(sum / Math.max(1, n)),
+        rmse_transfer_error_px: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
+        max_transfer_error_px: roundNumberForExport(maxErr),
+        convention: "central 200x200 source pixels are projected by H_true and H_estimated; error is Euclidean distance in the deformed image, in pixels"
       };
-      state.homographyRobustnessRecords.push(rec);
-      try{localStorage.setItem(ROBUSTNESS_STORAGE_KEY,JSON.stringify(state.homographyRobustnessRecords));}catch(e){}
-      setValidationMessage(`Homography test recorded (${state.homographyRobustnessRecords.length}) | X=${rec.angle_view_x_deg}° Y=${rec.angle_view_y_deg}° | symmetric RMSE=${transfer?.symmetric_rmse_px?.toFixed?.(3)??"?"} px`);
     }
 
-    function meanFiniteJS(a){const v=a.filter(Number.isFinite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;}
-    function csvEscapeJS(v){if(v===null||v===undefined)return"";const s=typeof v==="number"?String(v):String(v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;}
-    function exportHomographyRobustnessCSV(){
-      const rows=[["test_id","created_at","angle_x_deg","angle_y_deg","focal","refiner","tps_lambda","n_patches","patch_index","patch_x_def","patch_y_def","patch_size_px","local_A_vs_JH_gt_fro","local_A_vs_JH_gt_rel_fro","local_Ainv_vs_JG_gt_fro","local_Ainv_vs_JG_gt_rel_fro","global_JH_vs_gt_fro","global_JG_vs_gt_fro","phase_score","phase_ratio","hexagon_residual_relative","affinity_condition_number","affinity_determinant","global_H_fro_error","forward_transfer_rmse_px","symmetric_transfer_rmse_px","corner_transfer_mean_px","photometric_mae_gray"]];
-      for(const r of state.homographyRobustnessRecords) for(let i=0;i<r.local_comparisons.length;i++){
-        const l=r.local_comparisons[i],t=r.transfer_error_200x200||{},c=r.corner_transfer_error||{},p=r.photometric_rectification_error_200x200||{};
-        rows.push([r.test_id,r.created_at,r.angle_view_x_deg,r.angle_view_y_deg,r.focal,r.refinement_method,r.tps_lambda,r.validated_patches,i+1,l.center_deformed_xy[0],l.center_deformed_xy[1],l.patch_size_px,l.local_forward_affinity_fro_error,l.local_forward_affinity_relative_fro_error,l.local_inverse_affinity_fro_error,l.local_inverse_affinity_relative_fro_error,l.global_forward_jacobian_fro_error,l.global_inverse_jacobian_fro_error,l.phase_score,l.phase_ratio,l.hexagon_residual_relative,l.affinity_condition_number,l.affinity_determinant,r.homography_fro_error_full_normalized,t.forward_rmse_px,t.symmetric_rmse_px,c.mean_px,p.mae_gray]);
+    function computePixelRectificationError200x200() {
+      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
+      const Hestimated = computeEstimatedDeformationHomographySourceToDisplayed();
+      return computeGeometricDeformationError200x200(Htrue, Hestimated);
+    }
+
+    function computeTrueDeformationHomographySourceToDisplayed() {
+      if (state.testMode === 'real') return null;
+      const mode = state.projectionModes[state.projectionIndex];
+      const w = state.size;
+      const h = state.size;
+      if (mode === 'Affine') {
+        const cx = w / 2;
+        const cy = h / 2;
+        const zRot = degToRad(state.affine.rotationDeg);
+        const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
+        const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
+        const M = [
+          [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
+          [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
+        ];
+        return [
+          [M[0][0], M[0][1], cx - (M[0][0] * cx + M[0][1] * cy)],
+          [M[1][0], M[1][1], cy - (M[1][0] * cx + M[1][1] * cy)],
+          [0.0, 0.0, 1.0]
+        ];
       }
-      if(rows.length===1){setValidationMessage("No recorded homography robustness test");return;}
-      downloadTextFile("homography_robustness_dataset.csv",rows.map(r=>r.map(csvEscapeJS).join(",")).join("\n"),"text/csv");
+      if (mode === 'Perspective') {
+        const hom = buildPerspectiveHomography(w, h);
+        return hom ? hom.H : null;
+      }
+      return null;
     }
 
-    try{const saved=JSON.parse(localStorage.getItem(ROBUSTNESS_STORAGE_KEY)||"[]");if(Array.isArray(saved))state.homographyRobustnessRecords=saved;}catch(e){state.homographyRobustnessRecords=[];}
+    function computeEstimatedDeformationHomographySourceToDisplayed() {
+      return state.globalHomography ? invert3x3(state.globalHomography) : null;
+    }
+
+    function computeGlobalHomographyComparison() {
+      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
+      const Hrect = state.globalHomography || null;
+      const Hest = computeEstimatedDeformationHomographySourceToDisplayed();
+      return {
+        true_deformation_homography_source_to_deformed: exportMat3(Htrue),
+        estimated_rectifying_homography_deformed_to_source: exportMat3(Hrect),
+        estimated_deformation_homography_source_to_deformed: exportMat3(Hest),
+        frobenius_error_without_translation_column_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusErrorHomographyWithoutTranslationColumn(Htrue, Hest)),
+        note: Htrue && Hest ? 'Frobenius norm computed after normalization by H[2][2], using only the first two columns of each homography; the translation column is ignored.' : 'Global homography comparison available only when both true and estimated homographies exist.'
+      };
+    }
+
+    function makePeakPositionExport(item) {
+      const detection = item && item.detection ? item.detection : null;
+      const patchSize = Number(item && item.patchSize ? item.patchSize : state.patchSize);
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const scale = patchSize / computeSize;
+      const cxCompute = Math.floor(computeSize / 2);
+      const cyCompute = Math.floor(computeSize / 2);
+      const cxPatch = (patchSize - 1) / 2.0;
+      const cyPatch = (patchSize - 1) / 2.0;
+
+      if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) {
+        return {
+          compute_size: computeSize,
+          patch_size: patchSize,
+          scale_patch_over_compute: roundNumberForExport(scale),
+          peaks: []
+        };
+      }
+
+      const shiftDefs = [
+        { label: "+U", rc: detection.u_fin },
+        { label: "-U", rc: [-detection.u_fin[0], -detection.u_fin[1]] },
+        { label: "+V", rc: detection.v_fin },
+        { label: "-V", rc: [-detection.v_fin[0], -detection.v_fin[1]] },
+        { label: "+W = +(U-V)", rc: detection.w_fin },
+        { label: "-W = -(U-V)", rc: [-detection.w_fin[0], -detection.w_fin[1]] }
+      ];
+
+      const peaks = shiftDefs.map((p) => {
+        const rowShift = Number(p.rc[0]);
+        const colShift = Number(p.rc[1]);
+        const dxCompute = colShift;
+        const dyCompute = rowShift;
+        const dxPatch = dxCompute * scale;
+        const dyPatch = dyCompute * scale;
+        return {
+          label: p.label,
+          shift_rc_compute_px: [roundNumberForExport(rowShift), roundNumberForExport(colShift)],
+          shift_xy_compute_px: [roundNumberForExport(dxCompute), roundNumberForExport(dyCompute)],
+          position_xy_in_autocorr_compute_px: {
+            x: roundNumberForExport(cxCompute + dxCompute),
+            y: roundNumberForExport(cyCompute + dyCompute)
+          },
+          shift_xy_patch_px: [roundNumberForExport(dxPatch), roundNumberForExport(dyPatch)],
+          position_xy_in_patch_scale_px: {
+            x: roundNumberForExport(cxPatch + dxPatch),
+            y: roundNumberForExport(cyPatch + dyPatch)
+          }
+        };
+      });
+
+      return {
+        compute_size: computeSize,
+        patch_size: patchSize,
+        scale_patch_over_compute: roundNumberForExport(scale),
+        center_autocorr_compute_px: {
+          x: roundNumberForExport(cxCompute),
+          y: roundNumberForExport(cyCompute)
+        },
+        center_patch_scale_px: {
+          x: roundNumberForExport(cxPatch),
+          y: roundNumberForExport(cyPatch)
+        },
+        peaks
+      };
+    }
+
+    // =========================================================
+    // HOMOGRAPHY ROBUSTNESS EXPORT (EVALUATION ONLY)
+    // =========================================================
+    // IMPORTANT: the functions below are only called when the user explicitly
+    // clicks "Save Homography Robustness Result". Ground truth is therefore
+    // used for evaluation/export only, never to produce the validated points,
+    // local affinities or the displayed rectification in this export block.
+
+    function mat2FrobeniusError(A, B) {
+      if (!A || !B) return null;
+      let s = 0.0;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const a = Number(A[r][c]);
+          const b = Number(B[r][c]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const d = a - b;
+          s += d * d;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function mat2RelativeFrobeniusError(A, B) {
+      const e = mat2FrobeniusError(A, B);
+      if (!Number.isFinite(e) || !B) return null;
+      const denom = mat2Frobenius(B);
+      if (!Number.isFinite(denom) || denom < 1e-12) return null;
+      return e / denom;
+    }
+
+    function normalizedHomographyFrobeniusError(A, B) {
+      if (!A || !B) return null;
+      const An = normalizeHomography3x3(A);
+      const Bn = normalizeHomography3x3(B);
+      let s = 0.0;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 3; c++) {
+          const a = Number(An[r][c]);
+          const b = Number(Bn[r][c]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const d = a - b;
+          s += d * d;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function meanAbsoluteGrayDifference(imageA, imageB) {
+      if (!imageA || !imageB || imageA.width !== imageB.width || imageA.height !== imageB.height) return null;
+      const n = imageA.width * imageA.height;
+      let s = 0.0;
+      for (let i = 0; i < n; i++) {
+        s += Math.abs(Number(imageA.data[4 * i]) - Number(imageB.data[4 * i]));
+      }
+      return s / Math.max(1, n);
+    }
+
+    function computeHomographyTransferMetrics(Hgt, Hest, gridN = 21) {
+      if (!Hgt || !Hest) return null;
+      const Ggt = invert3x3(Hgt);
+      const Gest = invert3x3(Hest);
+      if (!Ggt || !Gest) return null;
+
+      let n = 0;
+      let sumForwardSq = 0.0;
+      let sumBackwardSq = 0.0;
+      let sumSymSq = 0.0;
+      let maxForward = 0.0;
+
+      const margin = Math.max(1, Math.round(0.03 * state.size));
+      for (let iy = 0; iy < gridN; iy++) {
+        const y = margin + (state.size - 1 - 2 * margin) * (iy / Math.max(1, gridN - 1));
+        for (let ix = 0; ix < gridN; ix++) {
+          const x = margin + (state.size - 1 - 2 * margin) * (ix / Math.max(1, gridN - 1));
+          const p = [x, y];
+          const qgt = applyHomographyPoint(Hgt, p);
+          const qest = applyHomographyPoint(Hest, p);
+          if (!qgt || !qest) continue;
+
+          const dxf = qest[0] - qgt[0];
+          const dyf = qest[1] - qgt[1];
+          const ef2 = dxf * dxf + dyf * dyf;
+
+          const pest = applyHomographyPoint(Gest, qgt);
+          if (!pest) continue;
+          const dxb = pest[0] - p[0];
+          const dyb = pest[1] - p[1];
+          const eb2 = dxb * dxb + dyb * dyb;
+
+          sumForwardSq += ef2;
+          sumBackwardSq += eb2;
+          sumSymSq += 0.5 * (ef2 + eb2);
+          maxForward = Math.max(maxForward, Math.sqrt(ef2));
+          n++;
+        }
+      }
+
+      if (!n) return null;
+
+      const corners = [
+        [0, 0],
+        [state.size - 1, 0],
+        [state.size - 1, state.size - 1],
+        [0, state.size - 1]
+      ];
+      const cornerErrors = corners.map((p) => {
+        const a = applyHomographyPoint(Hgt, p);
+        const b = applyHomographyPoint(Hest, p);
+        if (!a || !b) return null;
+        return Math.hypot(b[0] - a[0], b[1] - a[1]);
+      }).filter(Number.isFinite);
+
+      return {
+        grid_size: gridN,
+        samples: n,
+        forward_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumForwardSq / n)),
+        backward_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumBackwardSq / n)),
+        symmetric_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumSymSq / n)),
+        max_forward_transfer_error_px: roundNumberForExport(maxForward),
+        corner_transfer_mean_px: cornerErrors.length
+          ? roundNumberForExport(cornerErrors.reduce((a, b) => a + b, 0) / cornerErrors.length)
+          : null,
+        corner_transfer_errors_px: cornerErrors.map(roundNumberForExport)
+      };
+    }
+
+    function buildTextureExperimentFolderName() {
+      const t = state.texture;
+      return [
+        'texture',
+        `occ_${filenameSafeNumber(t.occupancy)}`,
+        `dilation_${filenameSafeNumber(t.dilation)}`,
+        `shiftAngle_${filenameSafeNumber(t.angleShiftDeg)}`,
+        `shiftNorm_${filenameSafeNumber(t.normShift)}`,
+        `blur_${filenameSafeNumber(t.blurSigma)}`
+      ].join('__');
+    }
+
+    function buildRobustnessResultFilename() {
+      const deform = getCurrentDeformationParameters();
+      const parts = [sanitizeFilenamePart(deform.mode).toLowerCase()];
+      Object.entries(deform.parameters || {}).forEach(([key, value]) => {
+        if (value === null || value === undefined) return;
+        parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
+      });
+      parts.push(`refiner_${sanitizeFilenamePart(state.peakDetection.refinementMethod)}`);
+      if (String(state.peakDetection.refinementMethod).toLowerCase() === "tps") {
+        parts.push(`tpsLambda_${filenameSafeNumber(state.peakDetection.tpsLambda, 6)}`);
+      }
+      parts.push(`patches_${state.validatedAffinities.length}`);
+      return `${parts.join('__')}.json`;
+    }
+
+    function computeLocalRobustnessRecords(Hgt) {
+      if (!Hgt) return (state.validatedAffinities || []).map((item, idx) => ({
+        id: idx + 1,
+        gt_available: false,
+        deformed_patch_center_xy: exportPoint(item.center),
+        patch_size_px: item.patchSize || state.patchSize,
+        estimated_forward_affinity_A: exportMat2(item.M),
+        estimated_rectifying_affinity_Ainv: exportMat2(item.Arect)
+      }));
+
+      const Ggt = invert3x3(Hgt);
+      return (state.validatedAffinities || []).map((item, idx) => {
+        const y = [Number(item.center.x), Number(item.center.y)];
+        const xgt = Ggt ? applyHomographyPoint(Ggt, y) : null;
+        const JHgt = xgt ? jacobianHomographyAtInput(Hgt, xgt[0], xgt[1]) : null;
+        const JGgt = Ggt ? jacobianHomographyAtInput(Ggt, y[0], y[1]) : null;
+
+        const eAfro = mat2FrobeniusError(item.M, JHgt);
+        const eArel = mat2RelativeFrobeniusError(item.M, JHgt);
+        const eInvFro = mat2FrobeniusError(item.Arect, JGgt);
+        const eInvRel = mat2RelativeFrobeniusError(item.Arect, JGgt);
+
+        let matchedCenterError = null;
+        if (xgt && item.referenceCenter && isFinitePoint(item.referenceCenter)) {
+          matchedCenterError = Math.hypot(
+            Number(item.referenceCenter.x) - xgt[0],
+            Number(item.referenceCenter.y) - xgt[1]
+          );
+        }
+
+        return {
+          id: idx + 1,
+          gt_available: true,
+          deformed_patch_center_xy: exportPoint(item.center),
+          true_source_center_xy: xgt ? { x: roundNumberForExport(xgt[0]), y: roundNumberForExport(xgt[1]) } : null,
+          matched_reference_center_xy: exportPoint(item.referenceCenter),
+          matched_reference_center_error_px: roundNumberForExport(matchedCenterError),
+          patch_size_px: item.patchSize || state.patchSize,
+          selected_pair: item.pairName || null,
+          refinement_method: item.detection?.method || state.peakDetection.refinementMethod,
+          phase_correlation_score: roundNumberForExport(item.phaseScore),
+          phase_ratio_to_second: roundNumberForExport(item.phaseRatioToSecond),
+          hexagon_residual_relative: roundNumberForExport(item.residualRelative),
+          estimated_forward_affinity_A: exportMat2(item.M),
+          gt_forward_jacobian_JH: exportMat2(JHgt),
+          error_A_vs_JH_fro: roundNumberForExport(eAfro),
+          error_A_vs_JH_rel_fro: roundNumberForExport(eArel),
+          estimated_rectifying_affinity_Ainv: exportMat2(item.Arect),
+          gt_rectifying_jacobian_JG: exportMat2(JGgt),
+          error_Ainv_vs_JG_fro: roundNumberForExport(eInvFro),
+          error_Ainv_vs_JG_rel_fro: roundNumberForExport(eInvRel),
+          affinity_determinant: roundNumberForExport(mat2Det(item.M)),
+          affinity_condition_number: roundNumberForExport(mat2ConditionNumberApprox(item.M)),
+          detected_hexagon: makePeakPositionExport(item)
+        };
+      });
+    }
+
+    function aggregateLocalRobustness(localRecords) {
+      const meanFinite = (key) => {
+        const vals = (localRecords || []).map((r) => Number(r[key])).filter(Number.isFinite);
+        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+      };
+      return {
+        local_forward_affinity_fro_mean: roundNumberForExport(meanFinite('error_A_vs_JH_fro')),
+        local_forward_affinity_rel_fro_mean: roundNumberForExport(meanFinite('error_A_vs_JH_rel_fro')),
+        local_rectifying_affinity_fro_mean: roundNumberForExport(meanFinite('error_Ainv_vs_JG_fro')),
+        local_rectifying_affinity_rel_fro_mean: roundNumberForExport(meanFinite('error_Ainv_vs_JG_rel_fro')),
+        matched_reference_center_error_mean_px: roundNumberForExport(meanFinite('matched_reference_center_error_px')),
+        mean_patch_size_px: roundNumberForExport(meanFinite('patch_size_px'))
+      };
+    }
+
+    function makeHomographyRobustnessExportPayload() {
+      const deform = getCurrentDeformationParameters();
+      const Hgt = computeTrueDeformationHomographySourceToDisplayed();
+      const Ggt = Hgt ? invert3x3(Hgt) : null;
+      const HrectEst = state.globalHomography || null;
+      const HdefEst = HrectEst ? invert3x3(HrectEst) : null;
+      const localRecords = computeLocalRobustnessRecords(Hgt);
+      const localSummary = aggregateLocalRobustness(localRecords);
+      const transfer = computeHomographyTransferMetrics(Hgt, HdefEst, 21);
+
+      return {
+        export_version: 4,
+        experiment_type: 'homography_robustness',
+        created_at: new Date().toISOString(),
+        suggested_folder_name: buildTextureExperimentFolderName(),
+        suggested_filename: buildRobustnessResultFilename(),
+
+        texture_parameters_fixed: {
+          black_occupancy: state.texture.occupancy,
+          dilation_radius: state.texture.dilation,
+          shift_angle_deg: state.texture.angleShiftDeg,
+          shift_norm_px: state.texture.normShift,
+          gaussian_blur_sigma: state.texture.blurSigma
+        },
+
+        detector_parameters_fixed: {
+          autocorrelation: "circular_fft_centered_unit_energy_fftshift",
+          k: state.peakDetection.k,
+          nms_size: state.peakDetection.nmsSize,
+          exclude_center_radius: state.peakDetection.excludeCenterRadius,
+          relative_peak_threshold: state.peakDetection.relativePeakThreshold,
+          min_separation: state.peakDetection.minSeparation,
+          energy_blur_sigma: state.peakDetection.energyBlurSigma,
+          fit_radius: state.peakDetection.fitRadius,
+          search_radius: state.peakDetection.searchRadius,
+          refinement_method: state.peakDetection.refinementMethod,
+          tps_lambda: state.peakDetection.tpsLambda,
+          kappa_max: state.peakDetection.kappaMax,
+          affinity_residual_max: state.peakDetection.affinityResidualMax,
+          phase_ratio_min: state.peakDetection.phaseRatioMin,
+          manual_patch_size_selection: true,
+          automatic_multiscale_search: false
+        },
+
+        deformation: {
+          projection_mode: deform.mode,
+          parameters: deform.parameters
+        },
+
+        estimation: {
+          validated_affinities_count: state.validatedAffinities.length,
+          estimated_rectifying_homography_deformed_to_source: exportMat3(HrectEst),
+          estimated_deformation_homography_source_to_deformed: exportMat3(HdefEst),
+          rectification_solver_info: state.globalHomographyInfo || null,
+          rectification_visualized: Boolean(state.rectificationEnabled || state.differenceEnabled),
+          photometric_rectification_mae_gray: roundNumberForExport(
+            meanAbsoluteGrayDifference(state.sourceImageData, state.rectificationImageData)
+          )
+        },
+
+        ground_truth_evaluation_only: {
+          available: Boolean(Hgt),
+          true_deformation_homography_source_to_deformed: exportMat3(Hgt),
+          true_rectifying_homography_deformed_to_source: exportMat3(Ggt),
+          note: 'Ground truth in this block is computed only when saving the robustness result.'
+        },
+
+        errors: {
+          normalized_homography_frobenius_error_source_to_deformed: roundNumberForExport(
+            normalizedHomographyFrobeniusError(HdefEst, Hgt)
+          ),
+          transfer_metrics: transfer,
+          ...localSummary
+        },
+
+        local_affinities: localRecords
+      };
+    }
+
+    function downloadTextFile(filename, text, mimeType = 'application/json') {
+      const blob = new Blob([text], { type: `${mimeType};charset=utf-8` });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      window.setTimeout(() => {
+        a.click();
+        window.setTimeout(() => {
+          URL.revokeObjectURL(url);
+          if (a.parentNode) a.parentNode.removeChild(a);
+        }, 500);
+      }, 0);
+    }
+
+    async function saveTextIntoExperimentFolder(folderName, filename, text) {
+      // Chromium browsers can create/use a real directory chosen by the user.
+      // Safari currently falls back to a normal download; the JSON still stores
+      // the exact suggested folder name so it can be grouped manually.
+      if (typeof window.showDirectoryPicker === 'function') {
+        try {
+          if (!window.__homographyRobustnessRootHandle) {
+            window.__homographyRobustnessRootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+          }
+          const dir = await window.__homographyRobustnessRootHandle.getDirectoryHandle(folderName, { create: true });
+          const fh = await dir.getFileHandle(filename, { create: true });
+          const writable = await fh.createWritable();
+          await writable.write(text);
+          await writable.close();
+          return { mode: 'directory', folderName, filename };
+        } catch (err) {
+          if (err && err.name === 'AbortError') return { mode: 'cancelled', folderName, filename };
+          console.warn('Directory save unavailable; falling back to download.', err);
+        }
+      }
+
+      downloadTextFile(filename, text, 'application/json');
+      return { mode: 'download', folderName, filename };
+    }
+
+    async function saveValidatedPeaksDetails() {
+      if (!state.validatedAffinities || !state.validatedAffinities.length) {
+        setValidationMessage('No validated affinity to save. Validate the patches first.');
+        return;
+      }
+      if (!state.globalHomography) {
+        setValidationMessage('No global rectification yet. Validate enough affinities and verify Rectify first.');
+        return;
+      }
+      const payload = makeHomographyRobustnessExportPayload();
+      const text = JSON.stringify(payload, null, 2);
+      const result = await saveTextIntoExperimentFolder(
+        payload.suggested_folder_name,
+        payload.suggested_filename,
+        text
+      );
+
+      if (result.mode === 'directory') {
+        setValidationMessage(`Saved robustness result: ${result.folderName}/${result.filename}`);
+      } else if (result.mode === 'download') {
+        setValidationMessage(`Downloaded ${result.filename}. Put it in folder: ${result.folderName}`);
+      } else {
+        setValidationMessage('Robustness result save cancelled.');
+      }
+    }
+
+    // =========================================================
+    // PARAMETER ACTIONS
+    // =========================================================
+    function resetAllParams() {
+      state.testMode = "synthetic";
+      updateTestModeUI();
+      state.texture = { ...DEFAULTS.texture };
+      state.realShifts = { ...DEFAULTS.realShifts };
+      state.affine = { ...DEFAULTS.affine };
+      state.perspective = { ...DEFAULTS.perspective };
+      state.cylindrical = { ...DEFAULTS.cylindrical };
+      state.shoulder = { ...DEFAULTS.shoulder };
+      state.crumpled = { ...DEFAULTS.crumpled };
+      state.twoPlanes = { ...DEFAULTS.twoPlanes };
+      state.patchSize = 90;
+      state.previewContrast = 2.2;
+      state.displayMode = "autocorr";
+      state.peaksEnabled = false;
+      state.projectionIndex = 0;
+      state.lockedPatch = false;
+      state.mouseX = state.size / 2;
+      state.mouseY = state.size / 2;
+      state.lockedPatchX = state.mouseX;
+      state.lockedPatchY = state.mouseY;
+      state.lastDetection = null;
+      state.lastAffinityEstimate = null;
+      state.validatedAffinities = [];
+      state.rectificationEnabled = false;
+      state.differenceEnabled = false;
+      state.rectificationImageData = null;
+      state.differenceImageData = null;
+      state.rectificationTransform = null;
+      state.globalHomography = null;
+      state.globalHomographyInfo = null;
+      state.triangulationEnabled = false;
+      state.triangulationData = null;
+      syncControlsFromState();
+      renderGeneratedTexture();
+      if (state.autocorrEnabled) {
+        const p = getActivePatchCenter();
+        renderAutocorrelationAt(p.x, p.y);
+      } else {
+        redrawMainCanvas();
+      }
+    }
+
+    function updatePreviewContrast(delta) {
+      state.previewContrast = clamp(Math.round((state.previewContrast + delta) * 10) / 10, 0.2, 8.0);
+      if (contrastSlider) contrastSlider.value = String(state.previewContrast);
+      refreshControlLabels();
+      if (state.autocorrEnabled) schedulePreviewRender();
+    }
+
+    function cycleProjectionMode() {
+      state.projectionIndex = (state.projectionIndex + 1) % state.projectionModes.length;
+      refreshProjectionPanels();
+      applyCurrentProjection();
+    }
 
     // =========================================================
     // EVENTS
@@ -4349,32 +5099,14 @@
     }
 
     if (btnValidateAffinity) {
-      btnValidateAffinity.addEventListener("click", () => {
-        if (btnValidateAffinity.disabled) return;
-        btnValidateAffinity.disabled = true;
-        setValidationMessage("Validating affinity: geometry filters + phase correlation...");
-        // Yield once so the status text is painted before the FFT work starts.
-        setTimeout(() => {
-          try {
-            validateCurrentAffinity();
-          } catch (err) {
-            console.error("Validate Affinity failed", err);
-            setValidationMessage(`Validation error: ${err && err.message ? err.message : err}`);
-          } finally {
-            btnValidateAffinity.disabled = false;
-            refreshRectificationUI();
-            redrawMainCanvas();
-          }
-        }, 20);
-      });
+      btnValidateAffinity.addEventListener("click", () => validateCurrentAffinity());
     }
 
     if (btnToggleRectification) {
       btnToggleRectification.addEventListener("click", () => {
         if (!state.rectificationImageData) recomputeRectification();
         if (!state.rectificationImageData) {
-          const nValid = state.validatedAffinities.length;
-          setValidationMessage(`Global Rectify requires at least 4 validated affinities (currently ${nValid}). After 1 validation, use the automatically opened Rectified Patches panel for local visual validation.`);
+          setValidationMessage("Need at least 3 validated affinities");
           refreshRectificationUI();
           redrawMainCanvas();
           return;
@@ -4412,29 +5144,6 @@
 
     if (btnSavePeaksDetails) {
       btnSavePeaksDetails.addEventListener("click", () => saveValidatedPeaksDetails());
-    }
-
-    if (btnRecordHomographyTest) {
-      btnRecordHomographyTest.addEventListener("click", () => recordCurrentHomographyRobustnessTest());
-    }
-    if (btnExportHomographyTests) {
-      btnExportHomographyTests.addEventListener("click", () => exportHomographyRobustnessCSV());
-    }
-    if (peakRefinementMethod) {
-      peakRefinementMethod.addEventListener("change", () => {
-        state.peakDetection.refinementMethod = peakRefinementMethod.value === "tps" ? "tps" : "quadratic";
-        clearValidatedAffinities();
-        if (state.autocorrEnabled) schedulePreviewRender();
-      });
-    }
-    if (tpsLambdaControl) {
-      tpsLambdaControl.addEventListener("change", () => {
-        const v = Number(tpsLambdaControl.value);
-        if (Number.isFinite(v) && v >= 0) state.peakDetection.tpsLambda = v;
-        if (valTpsLambda) valTpsLambda.textContent = String(state.peakDetection.tpsLambda);
-        clearValidatedAffinities();
-        if (state.autocorrEnabled) schedulePreviewRender();
-      });
     }
 
     if (btnClearAffinities) {
@@ -4491,6 +5200,28 @@
         refreshControlLabels();
         if (state.autocorrEnabled) schedulePreviewRender();
         else redrawMainCanvas();
+      });
+    }
+
+    if (peakRefinementMethod) {
+      peakRefinementMethod.addEventListener("change", () => {
+        state.peakDetection.refinementMethod =
+          String(peakRefinementMethod.value).toLowerCase() === "tps" ? "tps" : "quadratic";
+        state.lastDetection = null;
+        state.lastAffinityEstimate = null;
+        refreshControlLabels();
+        if (state.autocorrEnabled && state.peaksEnabled) schedulePreviewRender();
+      });
+    }
+
+    if (tpsLambdaControl) {
+      tpsLambdaControl.addEventListener("change", () => {
+        const v = Number(tpsLambdaControl.value);
+        if (Number.isFinite(v) && v >= 0) state.peakDetection.tpsLambda = v;
+        state.lastDetection = null;
+        state.lastAffinityEstimate = null;
+        refreshControlLabels();
+        if (state.autocorrEnabled && state.peaksEnabled) schedulePreviewRender();
       });
     }
 

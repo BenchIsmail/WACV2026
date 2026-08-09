@@ -2441,6 +2441,311 @@
       return candidates;
     }
 
+    function extractGrayPatchArray(imageData, cx, cy, patchSize) {
+      const out = new Float64Array(patchSize * patchSize);
+      const half = patchSize / 2;
+      let k = 0;
+      for (let j = 0; j < patchSize; j++) {
+        const yy = cy - half + (j + 0.5);
+        for (let i = 0; i < patchSize; i++) {
+          const xx = cx - half + (i + 0.5);
+          out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
+        }
+      }
+      return out;
+    }
+
+    function rectifyPatchWithMatrix(imageData, cx, cy, patchSize, M) {
+      const out = new Float64Array(patchSize * patchSize);
+      const half = patchSize / 2;
+      let k = 0;
+      for (let j = 0; j < patchSize; j++) {
+        const dy = (j + 0.5) - half;
+        for (let i = 0; i < patchSize; i++) {
+          const dx = (i + 0.5) - half;
+          const sx = cx + M[0][0] * dx + M[0][1] * dy;
+          const sy = cy + M[1][0] * dx + M[1][1] * dy;
+          out[k++] = sampleGrayBilinear(imageData, sx, sy, 255);
+        }
+      }
+      return out;
+    }
+
+
+    function makePatchCanvasFromGrayArray(gray, patchSize, displaySize = 128) {
+      const c = document.createElement("canvas");
+      c.width = Math.max(32, Math.min(256, Math.round(displaySize)));
+      c.height = c.width;
+      const cctx = c.getContext("2d", { willReadFrequently: true });
+      const img = new ImageData(c.width, c.height);
+      for (let y = 0; y < c.height; y++) {
+        const sy = ((y + 0.5) / c.height) * patchSize - 0.5;
+        const y0 = Math.floor(sy);
+        const y1 = Math.min(patchSize - 1, Math.max(0, y0 + 1));
+        const fy = sy - y0;
+        const yy0 = Math.min(patchSize - 1, Math.max(0, y0));
+        for (let x = 0; x < c.width; x++) {
+          const sx = ((x + 0.5) / c.width) * patchSize - 0.5;
+          const x0 = Math.floor(sx);
+          const x1 = Math.min(patchSize - 1, Math.max(0, x0 + 1));
+          const fx = sx - x0;
+          const xx0 = Math.min(patchSize - 1, Math.max(0, x0));
+          const v00 = gray[yy0 * patchSize + xx0] ?? 255;
+          const v10 = gray[yy0 * patchSize + x1] ?? 255;
+          const v01 = gray[y1 * patchSize + xx0] ?? 255;
+          const v11 = gray[y1 * patchSize + x1] ?? 255;
+          const v0 = v00 * (1 - fx) + v10 * fx;
+          const v1 = v01 * (1 - fx) + v11 * fx;
+          const v = clamp(v0 * (1 - fy) + v1 * fy, 0, 255);
+          const idx = (y * c.width + x) * 4;
+          img.data[idx] = v;
+          img.data[idx + 1] = v;
+          img.data[idx + 2] = v;
+          img.data[idx + 3] = 255;
+        }
+      }
+      cctx.putImageData(img, 0, 0);
+      return c;
+    }
+
+    function appendPatchThumb(parent, label, gray, patchSize) {
+      const wrap = document.createElement("div");
+      wrap.className = "patch-thumb-wrap";
+      const canvasThumb = makePatchCanvasFromGrayArray(gray, patchSize, 128);
+      const caption = document.createElement("div");
+      caption.textContent = label;
+      wrap.appendChild(canvasThumb);
+      wrap.appendChild(caption);
+      parent.appendChild(wrap);
+    }
+
+    function refreshPatchViewButton() {
+      if (!btnTogglePatchView) return;
+      btnTogglePatchView.classList.toggle("is-link", state.patchViewEnabled);
+      btnTogglePatchView.classList.toggle("is-light", !state.patchViewEnabled);
+      const textSpan = btnTogglePatchView.querySelector("span:last-child");
+      if (textSpan) textSpan.textContent = state.patchViewEnabled ? "Hide Rectified Patches" : "Show Rectified Patches";
+    }
+
+    function renderValidatedPatchesPanel() {
+      if (!patchViewPanel || !patchViewGrid) return;
+      patchViewPanel.classList.toggle("is-active", state.patchViewEnabled);
+      refreshPatchViewButton();
+      patchViewGrid.innerHTML = "";
+
+      if (!state.patchViewEnabled) return;
+
+      const n = state.validatedAffinities.length;
+      if (patchViewSummary) {
+        patchViewSummary.textContent = n
+          ? `${n} validated patch${n > 1 ? "es" : ""}. Each row shows the best matching reference crop found in the whole reference image, the deformed patch, and the locally rectified patch.`
+          : "No validated patch yet.";
+      }
+
+      if (!n) {
+        const empty = document.createElement("div");
+        empty.className = "patch-card";
+        empty.textContent = "Validate at least one affinity to see its local rectification.";
+        patchViewGrid.appendChild(empty);
+        return;
+      }
+
+      state.validatedAffinities.forEach((item, idx) => {
+        const patchSize = item.patchSize || state.patchSize;
+        if (!item.sourcePatch || !item.deformedPatch || !item.rectifiedPatch) return;
+
+        const card = document.createElement("div");
+        card.className = "patch-card";
+
+        const title = document.createElement("div");
+        title.className = "patch-card-title";
+        title.textContent = `Patch ${idx + 1}`;
+
+        const meta = document.createElement("div");
+        meta.className = "patch-card-meta";
+        const cx = item.center ? item.center.x.toFixed(1) : "?";
+        const cy = item.center ? item.center.y.toFixed(1) : "?";
+        const score = Number.isFinite(item.phaseScore) ? item.phaseScore.toFixed(4) : "n/a";
+        const rcx = item.referenceCenter ? item.referenceCenter.x.toFixed(1) : "?";
+        const rcy = item.referenceCenter ? item.referenceCenter.y.toFixed(1) : "?";
+        const srcx = item.referenceCenterSeed ? item.referenceCenterSeed.x.toFixed(1) : "?";
+        const srcy = item.referenceCenterSeed ? item.referenceCenterSeed.y.toFixed(1) : "?";
+        meta.textContent = `def center=(${cx}, ${cy}) · matched ref center=(${rcx}, ${rcy}) · seed ref center=(${srcx}, ${srcy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
+
+        const triplet = document.createElement("div");
+        triplet.className = "patch-triplet";
+        appendPatchThumb(triplet, "reference (best full-image match)", item.sourcePatch, patchSize);
+        appendPatchThumb(triplet, "deformed", item.deformedPatch, patchSize);
+        appendPatchThumb(triplet, "rectified", item.rectifiedPatch, patchSize);
+
+        card.appendChild(title);
+        card.appendChild(meta);
+        card.appendChild(triplet);
+        patchViewGrid.appendChild(card);
+      });
+    }
+
+    function nextPow2(n) {
+      let p = 1;
+      while (p < n) p <<= 1;
+      return p;
+    }
+
+    function fft1d(re, im, inverse = false) {
+      const n = re.length;
+      let j = 0;
+      for (let i = 1; i < n; i++) {
+        let bit = n >> 1;
+        while (j & bit) { j ^= bit; bit >>= 1; }
+        j ^= bit;
+        if (i < j) {
+          let tr = re[i]; re[i] = re[j]; re[j] = tr;
+          let ti = im[i]; im[i] = im[j]; im[j] = ti;
+        }
+      }
+      for (let len = 2; len <= n; len <<= 1) {
+        const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+        const wlenCos = Math.cos(ang);
+        const wlenSin = Math.sin(ang);
+        for (let i = 0; i < n; i += len) {
+          let wCos = 1.0, wSin = 0.0;
+          for (let j2 = 0; j2 < len / 2; j2++) {
+            const uRe = re[i + j2], uIm = im[i + j2];
+            const vRe0 = re[i + j2 + len / 2], vIm0 = im[i + j2 + len / 2];
+            const vRe = vRe0 * wCos - vIm0 * wSin;
+            const vIm = vRe0 * wSin + vIm0 * wCos;
+            re[i + j2] = uRe + vRe;
+            im[i + j2] = uIm + vIm;
+            re[i + j2 + len / 2] = uRe - vRe;
+            im[i + j2 + len / 2] = uIm - vIm;
+            const nwCos = wCos * wlenCos - wSin * wlenSin;
+            const nwSin = wCos * wlenSin + wSin * wlenCos;
+            wCos = nwCos; wSin = nwSin;
+          }
+        }
+      }
+      if (inverse) {
+        for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+      }
+    }
+
+    function fft2d(re, im, w, h, inverse = false) {
+      const rowRe = new Float64Array(w);
+      const rowIm = new Float64Array(w);
+      for (let y = 0; y < h; y++) {
+        const off = y * w;
+        for (let x = 0; x < w; x++) { rowRe[x] = re[off + x]; rowIm[x] = im[off + x]; }
+        fft1d(rowRe, rowIm, inverse);
+        for (let x = 0; x < w; x++) { re[off + x] = rowRe[x]; im[off + x] = rowIm[x]; }
+      }
+      const colRe = new Float64Array(h);
+      const colIm = new Float64Array(h);
+      for (let x = 0; x < w; x++) {
+        for (let y = 0; y < h; y++) {
+          const idx = y * w + x;
+          colRe[y] = re[idx]; colIm[y] = im[idx];
+        }
+        fft1d(colRe, colIm, inverse);
+        for (let y = 0; y < h; y++) {
+          const idx = y * w + x;
+          re[idx] = colRe[y]; im[idx] = colIm[y];
+        }
+      }
+    }
+
+    function phaseCorrelationScoreArrays(a, b, w, h) {
+      const N = nextPow2(Math.max(w, h));
+      const size = N * N;
+      const ar = new Float64Array(size), ai = new Float64Array(size);
+      const br = new Float64Array(size), bi = new Float64Array(size);
+      let meanA = 0.0, meanB = 0.0;
+      for (let i = 0; i < a.length; i++) meanA += a[i];
+      for (let i = 0; i < b.length; i++) meanB += b[i];
+      meanA /= Math.max(1, a.length);
+      meanB /= Math.max(1, b.length);
+      for (let y = 0; y < h; y++) {
+        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
+        for (let x = 0; x < w; x++) {
+          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
+          const win = wx * wy;
+          const idx0 = y * w + x;
+          const idx = y * N + x;
+          ar[idx] = (a[idx0] - meanA) * win;
+          br[idx] = (b[idx0] - meanB) * win;
+        }
+      }
+      fft2d(ar, ai, N, N, false);
+      fft2d(br, bi, N, N, false);
+      const cr = new Float64Array(size), ci = new Float64Array(size);
+      for (let i = 0; i < size; i++) {
+        const re = ar[i] * br[i] + ai[i] * bi[i];
+        const im = ai[i] * br[i] - ar[i] * bi[i];
+        const mag = Math.hypot(re, im);
+        if (mag > 1e-12) {
+          cr[i] = re / mag;
+          ci[i] = im / mag;
+        } else {
+          cr[i] = 0.0;
+          ci[i] = 0.0;
+        }
+      }
+      fft2d(cr, ci, N, N, true);
+      let best = -Infinity;
+      for (let i = 0; i < size; i++) {
+        const v = Math.hypot(cr[i], ci[i]);
+        if (v > best) best = v;
+      }
+      return best;
+    }
+
+    function getSourceGrayArray() {
+      if (!state.sourceImageData) return null;
+      if (state.sourceGrayCache && state.sourceGrayCache.width === state.sourceImageData.width && state.sourceGrayCache.height === state.sourceImageData.height) {
+        return state.sourceGrayCache.gray;
+      }
+      const w = state.sourceImageData.width;
+      const h = state.sourceImageData.height;
+      const out = new Float64Array(w * h);
+      const data = state.sourceImageData.data;
+      for (let i = 0, k = 0; i < data.length; i += 4, k++) {
+        out[k] = data[i];
+      }
+      state.sourceGrayCache = { width: w, height: h, gray: out };
+      return out;
+    }
+
+    function buildWindowedReferenceFFTCache() {
+      if (!state.sourceImageData) return null;
+      const w = state.sourceImageData.width;
+      const h = state.sourceImageData.height;
+      const N = nextPow2(Math.max(w, h));
+      const cached = state.sourcePhaseReferenceCache;
+      if (cached && cached.width === w && cached.height === h && cached.N === N) return cached;
+
+      const gray = getSourceGrayArray();
+      const size = N * N;
+      const re = new Float64Array(size);
+      const im = new Float64Array(size);
+
+      let mean = 0.0;
+      for (let i = 0; i < gray.length; i++) mean += gray[i];
+      mean /= Math.max(1, gray.length);
+
+      for (let y = 0; y < h; y++) {
+        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
+        for (let x = 0; x < w; x++) {
+          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
+          const idx0 = y * w + x;
+          const idx = y * N + x;
+          re[idx] = (gray[idx0] - mean) * wx * wy;
+        }
+      }
+
+      fft2d(re, im, N, N, false);
+      state.sourcePhaseReferenceCache = { width: w, height: h, N, re, im };
+      return state.sourcePhaseReferenceCache;
+    }
+
     function phaseCorrelatePatchAgainstWholeReference(patchGray, patchW, patchH) {
       const refCache = buildWindowedReferenceFFTCache();
       if (!refCache || !state.sourceImageData) return null;

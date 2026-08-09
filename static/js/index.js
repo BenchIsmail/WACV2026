@@ -1,4 +1,4 @@
-// Derived directly from user-provided index-12.js; minimal thesis/robustness patch.
+// index.js
 (function () {
   "use strict";
 
@@ -111,9 +111,6 @@
     const texShift = document.getElementById("tex-shift");
     const texBlur = document.getElementById("tex-blur");
     const patchSizeControl = document.getElementById("patch-size-control");
-    const peakRefinementMethod = document.getElementById("peak-refinement-method");
-    const tpsLambdaControl = document.getElementById("tps-lambda-control");
-    const valTpsLambda = document.getElementById("val-tps-lambda");
 
     const valOccupancy = document.getElementById("val-occupancy");
     const valDilation = document.getElementById("val-dilation");
@@ -268,39 +265,38 @@
       shoulder: { ...DEFAULTS.shoulder },
       crumpled: { ...DEFAULTS.crumpled },
       twoPlanes: { ...DEFAULTS.twoPlanes },
-      // Full selected patch resolution (patch size is capped at 140 px in the UI).
-      previewComputeSize: 140,
+      previewComputeSize: 64,
       centerBlendRadius: 6,
 
-      // Thesis-canonical detector. Patch size remains manually selected by the user.
+      // ---------------------------------------------------------
+      // Equivalent JS des kwargs de find_hexagon / stable patch.
+      // Tu peux modifier ces valeurs directement ici.
+      // ---------------------------------------------------------
       peakDetection: {
+        // Détection des maxima locaux dans l'autocorr
         k: 80,
         nmsSize: 9,
         excludeCenterRadius: 7.0,
         minSeparation: 3.0,
-        relativePeakThreshold: 0.05,
 
+        // Sélection du meilleur couple (u, v)
+        energyHalfwin: 2.0,
         minDist: 3.0,
         antipodalTol: 2.0,
         angleMinDeg: 12.0,
         wExcludeCenterRadius: 7.0,
 
-        energyBlurSigma: 1.0,
-        fitRadius: 2,
-        searchRadius: 1.5,
-        refinementMethod: "quadratic",
+        // Raffinement sous-pixelique simple 3x3
+        refineSubpixel: true,
 
-        tpsLambda: 0.001,
-        tpsCoarseSteps: 3,
-        tpsMultiStarts: 6,
-
-        detMin: 1e-6,
-        kappaMax: 50.0,
-        affinityResidualMax: 0.20,
-        phaseAbsoluteMin: 0.0,
-        phaseRatioMin: 2.0,
-
-        useStablePatch: false
+        // Si true, lance une version multi-échelles inspirée de
+        // find_min_stable_patch_size_centered. Plus lent.
+        useStablePatch: false,
+        minPs: 40,
+        maxPs: 140,
+        step: 4,
+        stableSeqLen: 3,
+        stableTol: 1.0
       },
 
       lastDetection: null,
@@ -910,9 +906,6 @@
       }
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${state.patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = state.patchSize;
-      if (peakRefinementMethod) peakRefinementMethod.value = state.peakDetection.refinementMethod;
-      if (tpsLambdaControl) tpsLambdaControl.value = String(state.peakDetection.tpsLambda);
-      if (valTpsLambda) valTpsLambda.textContent = String(state.peakDetection.tpsLambda);
       refreshRealShiftsSummary();
       refreshPeakStateUI();
     }
@@ -987,8 +980,6 @@
       if (texShift) texShift.value = String(state.texture.normShift);
       if (texBlur) texBlur.value = String(state.texture.blurSigma);
       if (patchSizeControl) patchSizeControl.value = String(state.patchSize);
-      if (peakRefinementMethod) peakRefinementMethod.value = state.peakDetection.refinementMethod;
-      if (tpsLambdaControl) tpsLambdaControl.value = String(state.peakDetection.tpsLambda);
 
       if (realShiftUX) realShiftUX.value = String(state.realShifts.uX);
       if (realShiftUY) realShiftUY.value = String(state.realShifts.uY);
@@ -1929,7 +1920,14 @@
       const computeSize = Math.min(state.previewComputeSize, ps);
       const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, ps, computeSize);
       const ac = computeAutocorrelation2D(patch, computeSize);
-      return findHexagonJS(ac, computeSize, state.peakDetection);
+      const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
+      return findHexagonJS(
+        ac,
+        computeSize,
+        state.peakDetection,
+        theoreticalInfo.U_ref_rc,
+        theoreticalInfo.V_ref_rc
+      );
     }
 
     function estimateAffinityAtPointUsingPredictedModel(cx, cy, patchSize, predictedM) {
@@ -2285,6 +2283,7 @@
       if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
 
       drawTriangulationOverlay();
+      drawValidatedAffinityMarkers();
 
       // Patch overlay: visible only on the deformed view, because validation is done
       // on the deformed image. The center cross is drawn explicitly so the locked
@@ -2314,9 +2313,6 @@
         ctx.fill();
         ctx.restore();
       }
-
-      // Validated centers are always drawn last, above the active green patch overlay.
-      drawValidatedAffinityMarkers();
     }
 
     // =========================================================
@@ -2335,37 +2331,13 @@
     }
 
     function getDisplayedDetectionForValidation() {
-      // STRICT MANUAL VALIDATION: use exactly the detection that produced the
-      // hexagon currently visible in the autocorrelation preview. Never rerun
-      // peak detection from this function.
-      const active = getActivePatchCenter();
-      const shownCenter = state.lastDetectionCenter;
-      const shownPatchSize = state.lastDetectionPatchSize;
-      const shownComputeSize = state.lastDetectionComputeSize;
-      const detection = state.lastDetection;
-
-      const sameCenter = shownCenter
-        && Math.hypot(shownCenter.x - active.x, shownCenter.y - active.y) <= 1e-6;
-      const samePatch = shownPatchSize === state.patchSize;
-      const validDetection = detection && detection.u_fin && detection.v_fin && detection.w_fin;
-
-      if (!validDetection || !sameCenter || !samePatch || !Number.isFinite(shownComputeSize)) {
-        return {
-          detection: null,
-          computeSize: Number.isFinite(shownComputeSize) ? shownComputeSize : state.patchSize,
-          center: shownCenter ? { ...shownCenter } : { ...active },
-          patchSize: shownPatchSize,
-          stale: true
-        };
+      const p = getActivePatchCenter();
+      const patchSize = state.patchSize;
+      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin && state.lastDetection.w_fin) {
+        return { detection: state.lastDetection, computeSize, center: p };
       }
-
-      return {
-        detection,
-        computeSize: shownComputeSize,
-        center: { ...shownCenter },
-        patchSize: shownPatchSize,
-        stale: false
-      };
+      return { detection: null, computeSize, center: p };
     }
 
     function angleXY(v) {
@@ -2418,57 +2390,44 @@
       ];
     }
 
-    function solveAffinitySixVertices(refVectors, obsVectors, weights = null) {
-      const w = weights || [1,1,1,1,1,1];
-      let rr00=0, rr01=0, rr11=0;
-      let dr00=0, dr01=0, dr10=0, dr11=0;
-      for (let k=0;k<6;k++) {
-        const wk=Number(w[k]); const r=refVectors[k]; const d=obsVectors[k];
-        rr00 += wk*r[0]*r[0]; rr01 += wk*r[0]*r[1]; rr11 += wk*r[1]*r[1];
-        dr00 += wk*d[0]*r[0]; dr01 += wk*d[0]*r[1];
-        dr10 += wk*d[1]*r[0]; dr11 += wk*d[1]*r[1];
-      }
-      const detR = rr00*rr11-rr01*rr01;
-      if (!Number.isFinite(detR) || Math.abs(detR)<1e-12) return null;
-      const inv00=rr11/detR, inv01=-rr01/detR, inv11=rr00/detR;
-      const M=[
-        [dr00*inv00+dr01*inv01, dr00*inv01+dr01*inv11],
-        [dr10*inv00+dr11*inv01, dr10*inv01+dr11*inv11]
-      ];
-      let num=0, den=0, meanSq=0, sw=0;
-      for (let k=0;k<6;k++) {
-        const wk=Number(w[k]); const r=refVectors[k]; const d=obsVectors[k];
-        const pred=mat2MulVec(M,r); const ex=d[0]-pred[0], ey=d[1]-pred[1];
-        num += wk*(ex*ex+ey*ey); den += wk*(d[0]*d[0]+d[1]*d[1]);
-        meanSq += wk*(ex*ex+ey*ey); sw += wk;
-      }
-      return { M, residualRelative: Math.sqrt(num)/(Math.sqrt(den)+1e-12), residualHexMeanSq: meanSq/Math.max(sw,1e-12) };
-    }
-
     function buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref) {
       const refSorted = sortHexagonByAngle(buildReferenceHexagonPeaksXY(Uref, Vref));
       const obsSorted = sortHexagonByAngle(observedPeaks);
       const candidates = [];
-      for (let shift=0;shift<6;shift++) {
-        const refs=[]; const obs=[]; const assignment=[];
-        for (let k=0;k<6;k++) {
-          const r=refSorted[k]; const d=obsSorted[(k+shift)%6];
-          refs.push(r.vec); obs.push(d.vec);
-          assignment.push({ref:r.shortLabel,obs:d.shortLabel,refAngle:angleXY(r.vec),obsAngle:angleXY(d.vec)});
+
+      // Your colleague's assignment observation: if there is no reflection and no
+      // aliasing, the observed deformed hexagon keeps the same circular order and
+      // same rotation sense as the original hexagon, up to a cyclic shift. Hence
+      // there are only six cyclic assignments to test.
+      for (let shift = 0; shift < 6; shift++) {
+        const map = new Map();
+        const assignment = [];
+        for (let k = 0; k < 6; k++) {
+          const refPeak = refSorted[k];
+          const obsPeak = obsSorted[(k + shift) % 6];
+          map.set(refPeak.refKey, obsPeak);
+          assignment.push({
+            ref: refPeak.shortLabel,
+            obs: obsPeak.shortLabel,
+            refAngle: angleXY(refPeak.vec),
+            obsAngle: angleXY(obsPeak.vec)
+          });
         }
-        const fit=solveAffinitySixVertices(refs,obs);
-        if (!fit) continue;
+
+        const obsForU = map.get("+U");
+        const obsForV = map.get("+V");
+        if (!obsForU || !obsForV) continue;
+        const M = solve2x2ForColumns(Uref, Vref, obsForU.vec, obsForV.vec);
+        if (!M) continue;
+
         candidates.push({
-          orderShift:shift,
+          orderShift: shift,
           assignment,
-          assignmentMode:"order_preserving_same_rotation_sense_six_vertex_ls",
-          M:fit.M,
-          residualRelative:fit.residualRelative,
-          residualHexMeanSq:fit.residualHexMeanSq,
-          pairName:`cyclic shift ${shift}`,
-          pairIndices:null,
-          Uobs:null,
-          Vobs:null
+          Uobs: obsForU.vec,
+          Vobs: obsForV.vec,
+          pairIndices: [obsForU.index, obsForV.index],
+          pairName: `${obsForU.shortLabel}→+U, ${obsForV.shortLabel}→+V`,
+          assignmentMode: "order_preserving_same_rotation_sense"
         });
       }
       return candidates;
@@ -2902,45 +2861,88 @@
       return Math.sqrt(lMax / lMin);
     }
 
-    function geometryValidityForAffinityCandidate(candidate) {
-      if (!candidate || !candidate.M) return { valid: false, reasons: ["missing_matrix"] };
-      const M = candidate.M;
-      const det = mat2Det(M);
-      const cond = mat2ConditionNumberApprox(M);
-      const residual = Number(candidate.residualRelative);
-      const reasons = [];
-      if (!Number.isFinite(det) || det <= Number(state.peakDetection.detMin)) reasons.push("determinant");
-      if (!Number.isFinite(cond) || cond > Number(state.peakDetection.kappaMax)) reasons.push("condition_number");
-      if (!Number.isFinite(residual) || residual > Number(state.peakDetection.affinityResidualMax)) reasons.push("hexagon_residual");
-      return { valid: reasons.length === 0, reasons, det, cond, residual };
+    function mat2Mean(mats) {
+      const valid = (mats || []).filter(Boolean);
+      if (!valid.length) return null;
+      const M = [[0,0],[0,0]];
+      for (const A of valid) {
+        M[0][0] += A[0][0]; M[0][1] += A[0][1];
+        M[1][0] += A[1][0]; M[1][1] += A[1][1];
+      }
+      M[0][0] /= valid.length; M[0][1] /= valid.length;
+      M[1][0] /= valid.length; M[1][1] /= valid.length;
+      return M;
     }
 
-    function chooseBestAffinityCandidate(candidates) {
+    function getValidatedMeanAffinity() {
+      return mat2Mean((state.validatedAffinities || [])
+        .filter((a) => a && a.M && Number.isFinite(mat2Det(a.M)) && mat2Det(a.M) > 0)
+        .map((a) => a.M));
+    }
+
+    function getExpectedLocalForwardAffinity(center) {
+      // Synthetic mode: the deformation is known, so the theoretical local
+      // Jacobian is a useful way to disambiguate the six peak assignments.
+      if (state.testMode !== "real" && center && typeof sourceToDisplayJacobianAt === "function") {
+        const J = sourceToDisplayJacobianAt(center.x, center.y);
+        if (J && Number.isFinite(mat2Det(J)) && Math.abs(mat2Det(J)) > 1e-9) return J;
+      }
+
+      // Real mode: there is no synthetic projection. After the first validated
+      // patch, the already validated mean affinity becomes the only geometric
+      // prior. Before that, we keep MExpected=null so phase correlation and the
+      // manually entered shifts drive the first assignment.
+      const mean = getValidatedMeanAffinity();
+      if (mean) return mean;
+      return state.testMode === "real" ? null : [[1, 0], [0, 1]];
+    }
+
+    function geometryPenaltyForCandidate(M, MExpected, MMean) {
+      if (!M) return 1e9;
+      const det = mat2Det(M);
+      if (!Number.isFinite(det)) return 1e9;
+
+      let penalty = 0;
+      // Reject flips: the orientation of the lattice should not change.
+      if (det <= 0) penalty += 1e6 + 1e5 * Math.abs(det);
+
+      const cond = mat2ConditionNumberApprox(M);
+      if (!Number.isFinite(cond)) penalty += 1e6;
+      else if (cond > 8.0) penalty += (cond - 8.0) * 20.0;
+
+      const colU = Math.hypot(M[0][1], M[1][1]); // M * (0, 1), proportional to Uref
+      const colV = Math.hypot(M[0][0], M[1][0]); // M * (1, 0), proportional to Vref
+      if (colU < 0.20 || colU > 4.50) penalty += 1e5;
+      if (colV < 0.20 || colV > 4.50) penalty += 1e5;
+
+      if (MExpected) penalty += 12.0 * mat2RelativeDistance(M, MExpected);
+      if (MMean) penalty += 4.0 * mat2RelativeDistance(M, MMean);
+      return penalty;
+    }
+
+    function chooseBestAffinityCandidate(candidates, center) {
       if (!candidates || !candidates.length) return null;
-      const geometricallyValid = [];
+      const MExpected = getExpectedLocalForwardAffinity(center);
+      const MMean = getValidatedMeanAffinity();
+      const maxPhase = Math.max(...candidates.map((c) => Number(c.phaseScore) || 0), 1e-9);
+
       for (const c of candidates) {
-        const g = geometryValidityForAffinityCandidate(c);
-        c.geometricallyValid = g.valid;
-        c.rejectionReasons = g.reasons;
-        c.det = g.det;
-        c.conditionNumber = g.cond;
-        if (g.valid) geometricallyValid.push(c);
+        const phaseNorm = (Number(c.phaseScore) || 0) / maxPhase;
+        const penalty = geometryPenaltyForCandidate(c.M, MExpected, MMean);
+        // Geometry is intentionally dominant. Phase correlation is only a tie-breaker,
+        // because the autocorrelation texture is periodic and phase scores are often ambiguous.
+        c.geometryPenalty = penalty;
+        c.distanceToExpected = MExpected ? mat2RelativeDistance(c.M, MExpected) : null;
+        c.distanceToValidatedMean = MMean ? mat2RelativeDistance(c.M, MMean) : null;
+        c.conditionNumber = mat2ConditionNumberApprox(c.M);
+        c.det = mat2Det(c.M);
+        c.phaseScoreNormalized = phaseNorm;
+        c.selectionScore = -penalty + 0.25 * phaseNorm;
+        c.selectionReferenceM = MExpected;
       }
-      if (!geometricallyValid.length) return null;
-      geometricallyValid.sort((a, b) => (Number(b.phaseScore) || 0) - (Number(a.phaseScore) || 0));
-      const best = geometricallyValid[0];
-      const s1 = Number(best.phaseScore) || 0;
-      const s2 = geometricallyValid.length > 1 ? (Number(geometricallyValid[1].phaseScore) || 0) : 0;
-      const ratio = s1 / (s2 + 1e-12);
-      best.phaseRatioToSecond = ratio;
-      best.accepted = s1 >= Number(state.peakDetection.phaseAbsoluteMin) && ratio >= Number(state.peakDetection.phaseRatioMin);
-      if (!best.accepted) {
-        best.rejectionReasons = [];
-        if (s1 < Number(state.peakDetection.phaseAbsoluteMin)) best.rejectionReasons.push("phase_absolute");
-        if (ratio < Number(state.peakDetection.phaseRatioMin)) best.rejectionReasons.push("phase_ratio");
-        return null;
-      }
-      return best;
+
+      candidates.sort((a, b) => b.selectionScore - a.selectionScore);
+      return candidates[0];
     }
 
     function estimateCurrentAffinityFromDetection() {
@@ -2960,60 +2962,93 @@
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
 
-      const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
+      const refCenterMapped = mapDisplayToSource(center.x, center.y);
+      const refCenterSeed = refCenterMapped || center;
+
+      const deformedPatch = extractGrayPatchArray(
+        state.displayedImageData,
+        center.x,
+        center.y,
+        state.patchSize
+      );
+      const seedReferencePatch = extractGrayPatchArray(
+        state.sourceImageData,
+        refCenterSeed.x,
+        refCenterSeed.y,
+        state.patchSize
+      );
+
       const assignmentCandidates = buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref);
       const candidates = [];
 
       for (const baseCandidate of assignmentCandidates) {
-        const M = baseCandidate.M;
+        const Uobs = baseCandidate.Uobs;
+        const Vobs = baseCandidate.Vobs;
+        const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
         if (!M) continue;
-
-        // Thesis order: hard geometric filters before expensive whole-image phase correlation.
-        const geom = geometryValidityForAffinityCandidate(baseCandidate);
-        if (!geom.valid) continue;
-
         const Arect = mat2Inv(M);
         if (!Arect) continue;
-        const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
-        const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(rectifiedPatch, state.patchSize, state.patchSize);
+
+        const rectifiedPatch = rectifyPatchWithMatrix(
+          state.displayedImageData,
+          center.x,
+          center.y,
+          state.patchSize,
+          M
+        );
+
+        const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(
+          rectifiedPatch,
+          state.patchSize,
+          state.patchSize
+        );
         if (!wholeRefMatch) continue;
 
         candidates.push({
-          ...baseCandidate,
+          pairIndices: baseCandidate.pairIndices,
+          pairName: baseCandidate.pairName,
+          orderShift: baseCandidate.orderShift,
+          assignment: baseCandidate.assignment,
+          assignmentMode: baseCandidate.assignmentMode,
           M,
           Arect,
-          det: geom.det,
-          conditionNumber: geom.cond,
           phaseScore: wholeRefMatch.score,
           rectifiedPatch,
           center: { ...center },
-          referenceCenter: { x: wholeRefMatch.matchedCenter.x, y: wholeRefMatch.matchedCenter.y },
+          referenceCenter: {
+            x: wholeRefMatch.matchedCenter.x,
+            y: wholeRefMatch.matchedCenter.y
+          },
+          referenceCenterSeed: { x: refCenterSeed.x, y: refCenterSeed.y },
           referencePeakXY: wholeRefMatch.peakXY,
           referenceShiftXY: wholeRefMatch.shiftXY,
           matchedReferenceCrop: wholeRefMatch.matchedReferenceCrop,
-          sourcePatch: wholeRefMatch.matchedReferenceCrop,
+          sourcePatch: wholeRefMatch.matchedReferenceCrop || seedReferencePatch,
           deformedPatch,
           patchSize: state.patchSize,
-          detection,
-          observedPeaks,
+          Uobs,
+          Vobs,
           Uref,
           Vref,
+          detection,
+          observedPeaks,
           projectionMode: state.testMode === "real" ? "Real image" : state.projectionModes[state.projectionIndex]
         });
       }
 
       if (!candidates.length) {
-        setValidationMessage("No solvable six-vertex affinity from displayed peaks");
+        setValidationMessage("No solvable affinity from displayed peaks");
         return null;
       }
 
-      const best = chooseBestAffinityCandidate(candidates);
+      const best = chooseBestAffinityCandidate(candidates, center);
       if (!best) {
-        setValidationMessage("Patch rejected: geometry invalid or phase assignment ambiguous");
+        setValidationMessage("No valid affinity candidate after geometric filtering");
         return null;
       }
+      best.seedReferencePatch = seedReferencePatch;
       best.allCandidates = candidates;
-      best.selectionMode = "six_vertices_weighted_ls_then_hard_geometry_filters_then_phase_correlation";
+      best.selectionMode = "order_preserving_assignment_then_geometry_expected_jacobian_then_phase_tiebreak";
       return best;
     }
 
@@ -3366,8 +3401,9 @@
 
       const anchorDef = averageValidatedCenter();
       const anchorRefFromMatches = averageValidatedReferenceCenter();
-      // No GT/projection mapping in estimation: use only phase-correlated reference centers.
-      const anchorRef = anchorRefFromMatches || anchorDef;
+      const anchorRefMapped = state.testMode === "real" ? null : mapDisplayToSource(anchorDef[0], anchorDef[1]);
+      const anchorRef = anchorRefFromMatches
+        || (anchorRefMapped ? [anchorRefMapped.x, anchorRefMapped.y] : anchorDef);
       const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
 
       state.rectificationTransform = opt;
@@ -3387,16 +3423,8 @@
     function validateCurrentAffinity() {
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
-      // Detect Peaks stays ON while the user adjusts p. Validate EXACTLY the
-      // hexagon that is currently displayed. Do not recompute peaks here.
-      const shown = getDisplayedDetectionForValidation();
-      if (!shown.detection || shown.stale) {
-        setValidationMessage("Displayed peaks are not current. Keep Detect Peaks ON, adjust/wait for the preview, then Validate Affinity.");
-        refreshRectificationUI();
-        redrawMainCanvas();
-        return;
-      }
-
+      const p = getActivePatchCenter();
+      renderAutocorrelationAt(p.x, p.y);
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
       if (!estimate) {
@@ -3404,19 +3432,11 @@
         redrawMainCanvas();
         return;
       }
-
       state.validatedAffinities.push(estimate);
-
+      const dExp = Number.isFinite(estimate.distanceToExpected) ? estimate.distanceToExpected.toFixed(3) : "?";
       const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
-      const condMsg = Number.isFinite(estimate.conditionNumber) ? estimate.conditionNumber.toFixed(2) : "?";
-      const resMsg = Number.isFinite(estimate.residualRelative) ? estimate.residualRelative.toFixed(4) : "?";
-      const ratioMsg = Number.isFinite(estimate.phaseRatioToSecond) ? estimate.phaseRatioToSecond.toFixed(2) : "?";
-      const methodMsg = estimate.detection?.method || state.peakDetection.refinementMethod;
-      setValidationMessage(
-        `OK - patch ${state.patchSize}px | ${methodMsg} | phase=${Number(estimate.phaseScore).toFixed(4)} | ratio=${ratioMsg} | det=${detMsg} | κ=${condMsg} | residual=${resMsg}`
-      );
-
-      // Preserve the original chain: center marker -> original Rectify/Show Difference/Show Deformed.
+      const shiftMsg = estimate.orderShift === undefined ? "?" : String(estimate.orderShift);
+      setValidationMessage(`OK - ${estimate.pairName} | order shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | dJ=${dExp} | det=${detMsg}`);
       recomputeRectification();
       if (state.triangulationEnabled) {
         state.triangulationData = buildTriangulationFromValidatedAffinities();
@@ -3884,9 +3904,8 @@
 
     function hexResultToPreviewPeaks(res, n) {
       if (!res) return [];
-      // fftshift zero-shift index from the thesis: floor(n/2).
-      const cx = Math.floor(n / 2);
-      const cy = Math.floor(n / 2);
+      const cx = (n - 1) / 2.0;
+      const cy = (n - 1) / 2.0;
       const items = [
         { name: "F+U", off: res.u_fin, color: "#ff9999" },
         { name: "F-U", off: [-res.u_fin[0], -res.u_fin[1]], color: "#ff9999" },
@@ -4028,200 +4047,6 @@
       }
     }
 
-    function isPowerOfTwoInt(n) {
-      n = Math.floor(n);
-      return n > 0 && (n & (n - 1)) === 0;
-    }
-
-    const dftTrigCache = new Map();
-    function getDftTrigTable(n) {
-      if (dftTrigCache.has(n)) return dftTrigCache.get(n);
-      const cos = new Float64Array(n * n);
-      const sin = new Float64Array(n * n);
-      for (let k = 0; k < n; k++) {
-        for (let t = 0; t < n; t++) {
-          const a = 2 * Math.PI * k * t / n;
-          cos[k*n+t] = Math.cos(a);
-          sin[k*n+t] = Math.sin(a);
-        }
-      }
-      const tab = { cos, sin };
-      dftTrigCache.set(n, tab);
-      return tab;
-    }
-
-    function transform1DAny(re, im, inverse = false) {
-      const n = re.length;
-      if (isPowerOfTwoInt(n)) {
-        fft1d(re, im, inverse);
-        return;
-      }
-      const { cos, sin } = getDftTrigTable(n);
-      const or = new Float64Array(n), oi = new Float64Array(n);
-      const sign = inverse ? 1.0 : -1.0;
-      for (let k=0;k<n;k++) {
-        let sr=0, si=0;
-        const off=k*n;
-        for (let t=0;t<n;t++) {
-          const c=cos[off+t], ss=sign*sin[off+t];
-          sr += re[t]*c - im[t]*ss;
-          si += re[t]*ss + im[t]*c;
-        }
-        if (inverse) { sr/=n; si/=n; }
-        or[k]=sr; oi[k]=si;
-      }
-      re.set(or); im.set(oi);
-    }
-
-    function transform2DAny(re, im, n, inverse = false) {
-      const rr=new Float64Array(n), ri=new Float64Array(n);
-      for (let y=0;y<n;y++) {
-        const off=y*n;
-        for (let x=0;x<n;x++){rr[x]=re[off+x];ri[x]=im[off+x];}
-        transform1DAny(rr,ri,inverse);
-        for (let x=0;x<n;x++){re[off+x]=rr[x];im[off+x]=ri[x];}
-      }
-      const cr=new Float64Array(n), ci=new Float64Array(n);
-      for (let x=0;x<n;x++) {
-        for (let y=0;y<n;y++){const k=y*n+x;cr[y]=re[k];ci[y]=im[k];}
-        transform1DAny(cr,ci,inverse);
-        for (let y=0;y<n;y++){const k=y*n+x;re[k]=cr[y];im[k]=ci[y];}
-      }
-    }
-
-    // Eq. autocorrelation-fft-energie: zero mean + unit L2 energy + circular FFT autocorrelation + fftshift.
-    function computeAutocorrelation2D(grayPatch, n) {
-      const size=n*n, re=new Float64Array(size), im=new Float64Array(size);
-      let mean=0; for(let i=0;i<size;i++) mean+=Number(grayPatch[i])||0; mean/=Math.max(1,size);
-      let energy=0; for(let i=0;i<size;i++){const v=(Number(grayPatch[i])||0)-mean;re[i]=v;energy+=v*v;}
-      energy=Math.sqrt(energy);
-      if(energy>1e-12) for(let i=0;i<size;i++) re[i]/=energy;
-      transform2DAny(re,im,n,false);
-      for(let i=0;i<size;i++){re[i]=re[i]*re[i]+im[i]*im[i];im[i]=0;}
-      transform2DAny(re,im,n,true);
-      const out=new Float64Array(size); const sh=Math.floor(n/2);
-      for(let y=0;y<n;y++) for(let x=0;x<n;x++) {
-        const yy=(y+sh)%n, xx=(x+sh)%n; out[yy*n+xx]=re[y*n+x];
-      }
-      let m=0; for(let i=0;i<size;i++) m=Math.max(m,Math.abs(out[i]));
-      if(m>1e-12) for(let i=0;i<size;i++) out[i]/=m;
-      return out;
-    }
-
-    function gaussianSmoothPeriodicJS(R,n,sigma) {
-      sigma=Number(sigma)||0; if(sigma<=0)return Float64Array.from(R);
-      const rad=Math.max(1,Math.ceil(3*sigma)); const ker=new Float64Array(2*rad+1); let sk=0;
-      for(let i=-rad;i<=rad;i++){const v=Math.exp(-(i*i)/(2*sigma*sigma));ker[i+rad]=v;sk+=v;}
-      for(let i=0;i<ker.length;i++)ker[i]/=sk;
-      const tmp=new Float64Array(n*n),out=new Float64Array(n*n);
-      for(let r=0;r<n;r++)for(let c=0;c<n;c++){let s0=0;for(let d=-rad;d<=rad;d++){const cc=(c+d+n)%n;s0+=ker[d+rad]*R[r*n+cc];}tmp[r*n+c]=s0;}
-      for(let r=0;r<n;r++)for(let c=0;c<n;c++){let s0=0;for(let d=-rad;d<=rad;d++){const rr=(r+d+n)%n;s0+=ker[d+rad]*tmp[rr*n+c];}out[r*n+c]=s0;}
-      return out;
-    }
-
-    // Candidates remain integer by definition. The historical name is retained for call compatibility.
-    function detectCandidatesSubpixelJS(R,n,kwargs) {
-      const k=Math.max(2,Math.floor(kwargs.k??80));
-      let nmsSize=Math.max(3,Math.floor(kwargs.nmsSize??9)); if(nmsSize%2===0)nmsSize++;
-      const rad=Math.floor(nmsSize/2), c0=Math.floor(n/2);
-      const r0=Number(kwargs.excludeCenterRadius??7), minSep=Number(kwargs.minSeparation??3);
-      const alpha=Number(kwargs.relativePeakThreshold??0.05);
-      let satMax=-Infinity;
-      for(let r=0;r<n;r++)for(let c=0;c<n;c++)if((r-c0)*(r-c0)+(c-c0)*(c-c0)>=r0*r0) satMax=Math.max(satMax,R[r*n+c]);
-      const thr=alpha*satMax, raw=[];
-      for(let r=0;r<n;r++)for(let c=0;c<n;c++) {
-        if((r-c0)*(r-c0)+(c-c0)*(c-c0)<r0*r0)continue;
-        const val=R[r*n+c]; if(!Number.isFinite(val)||val<thr)continue;
-        let local=true;
-        for(let dr=-rad;dr<=rad&&local;dr++)for(let dc=-rad;dc<=rad;dc++){
-          const rr=(r+dr+n)%n,cc=(c+dc+n)%n;if(R[rr*n+cc]>val){local=false;break;}
-        }
-        if(local)raw.push({r,c,value:val});
-      }
-      raw.sort((a,b)=>b.value-a.value);
-      const kept=[];
-      for(const q of raw){const p=[q.r,q.c];if(kept.every(x=>torusDistance(p,x,n)>=minSep))kept.push(p);if(kept.length>=k)break;}
-      return kept;
-    }
-
-    function fitQuadraticLocalJS(R,n,pos,radius=2) {
-      radius=Math.max(1,Math.floor(radius)); const m=6;
-      const ATA=Array.from({length:m},()=>new Array(m).fill(0)), ATz=new Array(m).fill(0);
-      let vals=[], rows=[], weights=[]; const sig=Math.max(0.75,radius/1.5);
-      for(let dr=-radius;dr<=radius;dr++)for(let dc=-radius;dc<=radius;dc++){
-        const row=[0.5*dr*dr,dr*dc,0.5*dc*dc,dr,dc,1];
-        const z=sampleArrayBilinearWrap(R,n,pos[0]+dr,pos[1]+dc); const w=Math.exp(-(dr*dr+dc*dc)/(2*sig*sig));
-        rows.push(row);vals.push(z);weights.push(w);
-        for(let a=0;a<m;a++){ATz[a]+=w*row[a]*z;for(let b=0;b<m;b++)ATA[a][b]+=w*row[a]*row[b];}
-      }
-      const coef=solveLinearSystem(ATA,ATz); if(!coef)return {valid:false,reason:"rank_deficient"};
-      let mse=0,sw=0,minv=Infinity,maxv=-Infinity;
-      for(let i=0;i<rows.length;i++){let pred=0;for(let j=0;j<m;j++)pred+=rows[i][j]*coef[j];const e=vals[i]-pred;mse+=weights[i]*e*e;sw+=weights[i];minv=Math.min(minv,vals[i]);maxv=Math.max(maxv,vals[i]);}
-      const H=[[coef[0],coef[1]],[coef[1],coef[2]]],g=[coef[3],coef[4]];
-      const tr=H[0][0]+H[1][1],detH=H[0][0]*H[1][1]-H[0][1]*H[1][0],disc=Math.max(0,tr*tr-4*detH);
-      const eig=[0.5*(tr-Math.sqrt(disc)),0.5*(tr+Math.sqrt(disc))];
-      return {valid:true,hessian:H,gradient:g,constant:coef[5],eigenvalues:eig,normalizedRmse:Math.sqrt(mse/Math.max(sw,1e-12))/Math.max(maxv-minv,1e-12)};
-    }
-
-    function isNegativeDefinite4(Q,tol=1e-10) {
-      // Cholesky of -Q.
-      const L=Array.from({length:4},()=>new Array(4).fill(0));
-      for(let i=0;i<4;i++)for(let j=0;j<=i;j++){
-        let sum=-Q[i][j];for(let k=0;k<j;k++)sum-=L[i][k]*L[j][k];
-        if(i===j){if(!(sum>tol))return false;L[i][j]=Math.sqrt(sum);}else L[i][j]=sum/L[j][j];
-      }
-      return true;
-    }
-
-    function quadValue4(gamma,b,Q,z){let v=gamma;for(let i=0;i<4;i++)v+=b[i]*z[i];for(let i=0;i<4;i++)for(let j=0;j<4;j++)v+=0.5*z[i]*Q[i][j]*z[j];return v;}
-
-    function maximizeConcaveQuadraticBoxJS(Q,b,gamma,h) {
-      if(!isNegativeDefinite4(Q))return null; let best=null;
-      for(let code=0;code<81;code++){
-        let q=code,status=[],z=[0,0,0,0],free=[],active=[];
-        for(let i=0;i<4;i++){const d=q%3;q=Math.floor(q/3);const st=d-1;status.push(st);if(st===0)free.push(i);else{active.push(i);z[i]=st<0?-h:h;}}
-        if(free.length){const A=free.map(i=>free.map(j=>Q[i][j]));const rhs=free.map(i=>{let r=-b[i];for(const j of active)r-=Q[i][j]*z[j];return r;});const sol=solveLinearSystem(A,rhs);if(!sol)continue;let feasible=true;for(let k=0;k<free.length;k++){if(sol[k]<-h-1e-8||sol[k]>h+1e-8){feasible=false;break;}z[free[k]]=sol[k];}if(!feasible)continue;}
-        const grad=new Array(4).fill(0).map((_,i)=>b[i]+Q[i][0]*z[0]+Q[i][1]*z[1]+Q[i][2]*z[2]+Q[i][3]*z[3]);
-        let ok=true;for(let i=0;i<4;i++){if(status[i]===0&&Math.abs(grad[i])>1e-5)ok=false;if(status[i]<0&&grad[i]>1e-5)ok=false;if(status[i]>0&&grad[i]<-1e-5)ok=false;}if(!ok)continue;
-        const val=quadValue4(gamma,b,Q,z);if(!best||val>best.value)best={value:val,z,status};
-      }
-      return best;
-    }
-
-    function jointQuadraticPairJS(R,n,uPos,vPos,kwargs) {
-      const center=[Math.floor(n/2),Math.floor(n/2)],h=Number(kwargs.searchRadius??1.5),rad=Math.floor(kwargs.fitRadius??2);
-      const u0=toCenteredOffset(uPos,n,center),v0=toCenteredOffset(vPos,n,center),w0=[u0[0]-v0[0],u0[1]-v0[1]],wPos=[center[0]+w0[0],center[1]+w0[1]];
-      const fits=[fitQuadraticLocalJS(R,n,uPos,rad),fitQuadraticLocalJS(R,n,vPos,rad),fitQuadraticLocalJS(R,n,wPos,rad)];if(fits.some(f=>!f.valid))return null;
-      const Ms=[[[1,0,0,0],[0,1,0,0]],[[0,0,1,0],[0,0,0,1]],[[1,0,-1,0],[0,1,0,-1]]];
-      const Q=Array.from({length:4},()=>new Array(4).fill(0)),b=[0,0,0,0];let gamma=0;
-      for(let fidx=0;fidx<3;fidx++){const M=Ms[fidx],H=fits[fidx].hessian,g=fits[fidx].gradient;gamma+=2*fits[fidx].constant;
-        for(let i=0;i<4;i++){b[i]+=2*(M[0][i]*g[0]+M[1][i]*g[1]);for(let j=0;j<4;j++){let v=0;for(let a=0;a<2;a++)for(let bb=0;bb<2;bb++)v+=M[a][i]*H[a][bb]*M[bb][j];Q[i][j]+=2*v;}}
-      }
-      const sol=maximizeConcaveQuadraticBoxJS(Q,b,gamma,h);if(!sol)return null;const z=sol.z,du=[z[0],z[1]],dv=[z[2],z[3]];const u=[u0[0]+du[0],u0[1]+du[1]],v=[v0[0]+dv[0],v0[1]+dv[1]],w=[u[0]-v[0],u[1]-v[1]];
-      return {score:sol.value,u,v,w,method:"quadratic",diagnostics:{fits,activeStatus:sol.status}};
-    }
-
-    function tpsPhiJS(r){return r>0?r*r*Math.log(r):0;}
-    const tpsSystemCache=new Map();
-    function luDecomposeJS(A){const n=A.length,LU=A.map(r=>r.slice()),piv=Array.from({length:n},(_,i)=>i);for(let k=0;k<n;k++){let p=k,b=Math.abs(LU[k][k]);for(let i=k+1;i<n;i++){const v=Math.abs(LU[i][k]);if(v>b){b=v;p=i;}}if(b<1e-12)return null;if(p!==k){[LU[p],LU[k]]=[LU[k],LU[p]];[piv[p],piv[k]]=[piv[k],piv[p]];}for(let i=k+1;i<n;i++){LU[i][k]/=LU[k][k];for(let j=k+1;j<n;j++)LU[i][j]-=LU[i][k]*LU[k][j];}}return{LU,piv};}
-    function luSolveJS(fac,b){const {LU,piv}=fac,n=LU.length,x=new Array(n);for(let i=0;i<n;i++)x[i]=b[piv[i]];for(let i=0;i<n;i++)for(let j=0;j<i;j++)x[i]-=LU[i][j]*x[j];for(let i=n-1;i>=0;i--){for(let j=i+1;j<n;j++)x[i]-=LU[i][j]*x[j];x[i]/=LU[i][i];}return x;}
-    function getTpsSystemJS(radius,lambda){const key=`${radius}|${lambda}`;if(tpsSystemCache.has(key))return tpsSystemCache.get(key);const nodes=[];for(let dr=-radius;dr<=radius;dr++)for(let dc=-radius;dc<=radius;dc++)nodes.push([dr,dc]);const N=nodes.length,m=N+3,A=Array.from({length:m},()=>new Array(m).fill(0));for(let i=0;i<N;i++){for(let j=0;j<N;j++)A[i][j]=tpsPhiJS(Math.hypot(nodes[i][0]-nodes[j][0],nodes[i][1]-nodes[j][1]))+(i===j?lambda:0);A[i][N]=1;A[i][N+1]=nodes[i][0];A[i][N+2]=nodes[i][1];A[N][i]=1;A[N+1][i]=nodes[i][0];A[N+2][i]=nodes[i][1];}const fac=luDecomposeJS(A);const obj={nodes,N,fac};tpsSystemCache.set(key,obj);return obj;}
-    function fitTpsLocalJS(R,n,pos,radius,lambda){const sys=getTpsSystemJS(radius,lambda);if(!sys.fac)return null;const rhs=new Array(sys.N+3).fill(0);for(let i=0;i<sys.N;i++)rhs[i]=sampleArrayBilinearWrap(R,n,pos[0]+sys.nodes[i][0],pos[1]+sys.nodes[i][1]);const c=luSolveJS(sys.fac,rhs);return{nodes:sys.nodes,beta:c.slice(0,sys.N),a:c.slice(sys.N)};}
-    function evalTpsJS(m,r){let v=m.a[0]+m.a[1]*r[0]+m.a[2]*r[1];for(let i=0;i<m.nodes.length;i++)v+=m.beta[i]*tpsPhiJS(Math.hypot(r[0]-m.nodes[i][0],r[1]-m.nodes[i][1]));return v;}
-    function boundedCoordinateMaxJS(fun,z0,h){let z=z0.slice(),best=fun(z),step=Math.max(h/2,0.25);while(step>1e-3){let improved=false;for(let d=0;d<4;d++)for(const sg of [-1,1]){const q=z.slice();q[d]=clamp(q[d]+sg*step,-h,h);const v=fun(q);if(v>best){best=v;z=q;improved=true;}}if(!improved)step*=0.5;}return{z,value:best};}
-    function jointTpsPairJS(R,n,uPos,vPos,kwargs){const center=[Math.floor(n/2),Math.floor(n/2)],h=Number(kwargs.searchRadius??1.5),rad=Math.floor(kwargs.fitRadius??2),lam=Number(kwargs.tpsLambda??0.001);const u0=toCenteredOffset(uPos,n,center),v0=toCenteredOffset(vPos,n,center),w0=[u0[0]-v0[0],u0[1]-v0[1]],wPos=[center[0]+w0[0],center[1]+w0[1]];const su=fitTpsLocalJS(R,n,uPos,rad,lam),sv=fitTpsLocalJS(R,n,vPos,rad,lam),sw=fitTpsLocalJS(R,n,wPos,rad,lam);if(!su||!sv||!sw)return null;const energy=z=>2*(evalTpsJS(su,[z[0],z[1]])+evalTpsJS(sv,[z[2],z[3]])+evalTpsJS(sw,[z[0]-z[2],z[1]-z[3]]));const steps=Math.max(2,Math.floor(kwargs.tpsCoarseSteps??3)),gv=[];for(let i=0;i<steps;i++)gv.push(-h+2*h*i/(steps-1));const seeds=[];for(const a of gv)for(const b of gv)for(const c of gv)for(const d of gv){const z=[a,b,c,d];seeds.push({z,value:energy(z)});}seeds.sort((x,y)=>y.value-x.value);const starts=[[0,0,0,0],...seeds.slice(0,Math.floor(kwargs.tpsMultiStarts??6)).map(q=>q.z)];let best=null;for(const z0 of starts){const q=boundedCoordinateMaxJS(energy,z0,h);if(!best||q.value>best.value)best=q;}if(!best)return null;const z=best.z,u=[u0[0]+z[0],u0[1]+z[1]],v=[v0[0]+z[2],v0[1]+z[3]],w=[u[0]-v[0],u[1]-v[1]];return{score:best.value,u,v,w,method:"tps",diagnostics:{lambda:lam,boundary:z.some(v=>Math.abs(Math.abs(v)-h)<1e-3)}};}
-
-    function findHexagonJS(R,n,kwargs) {
-      const candidates=detectCandidatesSubpixelJS(R,n,kwargs);if(candidates.length<2)return null;
-      const center=[Math.floor(n/2),Math.floor(n/2)],minDist=Number(kwargs.minDist??3),anti=Number(kwargs.antipodalTol??2),amin=Math.sin(degToRad(Number(kwargs.angleMinDeg??12))),rw=Number(kwargs.wExcludeCenterRadius??kwargs.excludeCenterRadius??7);
-      const Rs=gaussianSmoothPeriodicJS(R,n,Number(kwargs.energyBlurSigma??1));let best=null;
-      for(let i=0;i<candidates.length-1;i++)for(let j=i+1;j<candidates.length;j++){
-        const up=candidates[i],vp=candidates[j];if(torusDistance(up,vp,n)<minDist)continue;const u=toCenteredOffset(up,n,center),v=toCenteredOffset(vp,n,center);if(Math.hypot(u[0]+v[0],u[1]+v[1])<anti)continue;const nu=Math.hypot(...u),nv=Math.hypot(...v);if(nu<1e-9||nv<1e-9)continue;if(Math.abs(u[0]*v[1]-u[1]*v[0])/(nu*nv)<amin)continue;if(Math.hypot(u[0]-v[0],u[1]-v[1])<rw)continue;
-        const q=(String(kwargs.refinementMethod||"quadratic").toLowerCase()==="tps")?jointTpsPairJS(Rs,n,up,vp,kwargs):jointQuadraticPairJS(Rs,n,up,vp,kwargs);if(q&&Number.isFinite(q.score)&&(!best||q.score>best.score)){best={...q,pairIndices:[i,j]};}
-      }
-      if(!best)return null;return{u_fin:best.u,v_fin:best.v,w_fin:best.w,energy_final:best.score,score:best.score,ok:true,method:best.method,pair_indices:best.pairIndices,integer_candidates:candidates,hex6_centered:[best.u,[-best.u[0],-best.u[1]],best.v,[-best.v[0],-best.v[1]],best.w,[-best.w[0],-best.w[1]]],joint_diagnostics:best.diagnostics};
-    }
-
     function renderAutocorrelationAt(x, y) {
       if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
 
@@ -4232,12 +4057,8 @@
 
       const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, patchSize, computeSize);
       const ac = computeAutocorrelation2D(patch, computeSize);
-      const displayField = state.displayMode === "laplacian"
-        ? computeLaplacian2D(ac, computeSize, computeSize)
-        : ac;
-      const contrasted01 = applyDisplayContrastRobust(
-        displayField, computeSize, computeSize, state.previewContrast, state.displayMode
-      );
+      const displayField = state.displayMode === "laplacian" ? computeLaplacian2D(ac, computeSize, computeSize) : ac;
+      const contrasted01 = applyDisplayContrastRobust(displayField, computeSize, computeSize, state.previewContrast, state.displayMode);
       const gray = float01ToUint8(contrasted01);
       const img = createImageDataFromGray(gray, computeSize, computeSize);
 
@@ -4253,32 +4074,38 @@
       drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
 
       if (state.peaksEnabled) {
-        // Persistent Detect Peaks mode: wheel/slider changes schedule another call here.
-        // No GT/Jacobian is read in this path.
-        const detection = findHexagonJS(ac, computeSize, state.peakDetection);
+        const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
+        let detection = null;
+        if (state.peakDetection.useStablePatch) {
+          detection = runStableHexagonJS(patch, patchSize, computeSize, cx, cy, theoreticalInfo);
+        } else {
+          detection = findHexagonJS(ac, computeSize, state.peakDetection, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
+        }
         state.lastDetection = detection;
-        state.lastDetectionPatchSize = patchSize;
-        state.lastDetectionComputeSize = computeSize;
-        state.lastDetectionCenter = { x: cx, y: cy };
-        state.lastAffinityEstimate = null; // only Validate Affinity computes/selects A
+        state.lastAffinityEstimate = estimateCurrentAffinityFromDetection();
+        refreshRectificationUI();
         const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
         drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
-      } else {
-        state.lastDetection = null;
-        state.lastAffinityEstimate = null;
       }
 
-      refreshRectificationUI();
+      if (!state.peaksEnabled) {
+        state.lastDetection = null;
+        state.lastAffinityEstimate = null;
+        refreshRectificationUI();
+      }
+
       if (acorrModeLabel) {
-        acorrModeLabel.textContent = state.displayMode === "laplacian"
-          ? "Laplacian of Autocorrelation"
-          : "Autocorrelation";
+        acorrModeLabel.textContent = state.displayMode === "laplacian" ? "Laplacian of Autocorrelation" : "Autocorrelation";
       }
       if (patchSizeLabel) patchSizeLabel.textContent = `Patch: ${patchSize} px`;
       if (patchSizeInline) patchSizeInline.textContent = patchSize;
       redrawMainCanvas();
     }
 
+
+    // =========================================================
+    // SAVE VALIDATED PEAK DETAILS
+    // =========================================================
     function roundNumberForExport(v, digits = 6) {
       if (!Number.isFinite(v)) return null;
       const f = Math.pow(10, digits);
@@ -4587,8 +4414,8 @@
       const patchSize = Number(item && item.patchSize ? item.patchSize : state.patchSize);
       const computeSize = Math.min(state.previewComputeSize, patchSize);
       const scale = patchSize / computeSize;
-      const cxCompute = Math.floor(computeSize / 2);
-      const cyCompute = Math.floor(computeSize / 2);
+      const cxCompute = (computeSize - 1) / 2.0;
+      const cyCompute = (computeSize - 1) / 2.0;
       const cxPatch = (patchSize - 1) / 2.0;
       const cyPatch = (patchSize - 1) / 2.0;
 
@@ -4649,309 +4476,85 @@
       };
     }
 
-    // =========================================================
-    // HOMOGRAPHY ROBUSTNESS EXPORT (EVALUATION ONLY)
-    // =========================================================
-    // IMPORTANT: the functions below are only called when the user explicitly
-    // clicks "Save Homography Robustness Result". Ground truth is therefore
-    // used for evaluation/export only, never to produce the validated points,
-    // local affinities or the displayed rectification in this export block.
-
-    function mat2FrobeniusError(A, B) {
-      if (!A || !B) return null;
-      let s = 0.0;
-      for (let r = 0; r < 2; r++) {
-        for (let c = 0; c < 2; c++) {
-          const a = Number(A[r][c]);
-          const b = Number(B[r][c]);
-          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-          const d = a - b;
-          s += d * d;
-        }
-      }
-      return Math.sqrt(s);
-    }
-
-    function mat2RelativeFrobeniusError(A, B) {
-      const e = mat2FrobeniusError(A, B);
-      if (!Number.isFinite(e) || !B) return null;
-      const denom = mat2Frobenius(B);
-      if (!Number.isFinite(denom) || denom < 1e-12) return null;
-      return e / denom;
-    }
-
-    function normalizedHomographyFrobeniusError(A, B) {
-      if (!A || !B) return null;
-      const An = normalizeHomography3x3(A);
-      const Bn = normalizeHomography3x3(B);
-      let s = 0.0;
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) {
-          const a = Number(An[r][c]);
-          const b = Number(Bn[r][c]);
-          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-          const d = a - b;
-          s += d * d;
-        }
-      }
-      return Math.sqrt(s);
-    }
-
-    function meanAbsoluteGrayDifference(imageA, imageB) {
-      if (!imageA || !imageB || imageA.width !== imageB.width || imageA.height !== imageB.height) return null;
-      const n = imageA.width * imageA.height;
-      let s = 0.0;
-      for (let i = 0; i < n; i++) {
-        s += Math.abs(Number(imageA.data[4 * i]) - Number(imageB.data[4 * i]));
-      }
-      return s / Math.max(1, n);
-    }
-
-    function computeHomographyTransferMetrics(Hgt, Hest, gridN = 21) {
-      if (!Hgt || !Hest) return null;
-      const Ggt = invert3x3(Hgt);
-      const Gest = invert3x3(Hest);
-      if (!Ggt || !Gest) return null;
-
-      let n = 0;
-      let sumForwardSq = 0.0;
-      let sumBackwardSq = 0.0;
-      let sumSymSq = 0.0;
-      let maxForward = 0.0;
-
-      const margin = Math.max(1, Math.round(0.03 * state.size));
-      for (let iy = 0; iy < gridN; iy++) {
-        const y = margin + (state.size - 1 - 2 * margin) * (iy / Math.max(1, gridN - 1));
-        for (let ix = 0; ix < gridN; ix++) {
-          const x = margin + (state.size - 1 - 2 * margin) * (ix / Math.max(1, gridN - 1));
-          const p = [x, y];
-          const qgt = applyHomographyPoint(Hgt, p);
-          const qest = applyHomographyPoint(Hest, p);
-          if (!qgt || !qest) continue;
-
-          const dxf = qest[0] - qgt[0];
-          const dyf = qest[1] - qgt[1];
-          const ef2 = dxf * dxf + dyf * dyf;
-
-          const pest = applyHomographyPoint(Gest, qgt);
-          if (!pest) continue;
-          const dxb = pest[0] - p[0];
-          const dyb = pest[1] - p[1];
-          const eb2 = dxb * dxb + dyb * dyb;
-
-          sumForwardSq += ef2;
-          sumBackwardSq += eb2;
-          sumSymSq += 0.5 * (ef2 + eb2);
-          maxForward = Math.max(maxForward, Math.sqrt(ef2));
-          n++;
-        }
-      }
-
-      if (!n) return null;
-
-      const corners = [
-        [0, 0],
-        [state.size - 1, 0],
-        [state.size - 1, state.size - 1],
-        [0, state.size - 1]
-      ];
-      const cornerErrors = corners.map((p) => {
-        const a = applyHomographyPoint(Hgt, p);
-        const b = applyHomographyPoint(Hest, p);
-        if (!a || !b) return null;
-        return Math.hypot(b[0] - a[0], b[1] - a[1]);
-      }).filter(Number.isFinite);
-
-      return {
-        grid_size: gridN,
-        samples: n,
-        forward_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumForwardSq / n)),
-        backward_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumBackwardSq / n)),
-        symmetric_transfer_rmse_px: roundNumberForExport(Math.sqrt(sumSymSq / n)),
-        max_forward_transfer_error_px: roundNumberForExport(maxForward),
-        corner_transfer_mean_px: cornerErrors.length
-          ? roundNumberForExport(cornerErrors.reduce((a, b) => a + b, 0) / cornerErrors.length)
-          : null,
-        corner_transfer_errors_px: cornerErrors.map(roundNumberForExport)
-      };
-    }
-
-    function buildTextureExperimentFolderName() {
-      const t = state.texture;
-      return [
-        'texture',
-        `occ_${filenameSafeNumber(t.occupancy)}`,
-        `dilation_${filenameSafeNumber(t.dilation)}`,
-        `shiftAngle_${filenameSafeNumber(t.angleShiftDeg)}`,
-        `shiftNorm_${filenameSafeNumber(t.normShift)}`,
-        `blur_${filenameSafeNumber(t.blurSigma)}`
-      ].join('__');
-    }
-
-    function buildRobustnessResultFilename() {
+    function makeValidatedPeaksExportPayload() {
+      const refs = getTextureShiftVectorsSourcePx();
+      const U = refs.U;
+      const V = refs.V;
+      const W = [U[0] - V[0], U[1] - V[1]];
       const deform = getCurrentDeformationParameters();
-      const parts = [sanitizeFilenamePart(deform.mode).toLowerCase()];
-      Object.entries(deform.parameters || {}).forEach(([key, value]) => {
-        if (value === null || value === undefined) return;
-        parts.push(`${sanitizeFilenamePart(key)}_${filenameSafeNumber(value)}`);
-      });
-      parts.push(`refiner_${sanitizeFilenamePart(state.peakDetection.refinementMethod)}`);
-      if (String(state.peakDetection.refinementMethod).toLowerCase() === "tps") {
-        parts.push(`tpsLambda_${filenameSafeNumber(state.peakDetection.tpsLambda, 6)}`);
-      }
-      parts.push(`patches_${state.validatedAffinities.length}`);
-      return `${parts.join('__')}.json`;
-    }
-
-    function computeLocalRobustnessRecords(Hgt) {
-      if (!Hgt) return (state.validatedAffinities || []).map((item, idx) => ({
-        id: idx + 1,
-        gt_available: false,
-        deformed_patch_center_xy: exportPoint(item.center),
-        patch_size_px: item.patchSize || state.patchSize,
-        estimated_forward_affinity_A: exportMat2(item.M),
-        estimated_rectifying_affinity_Ainv: exportMat2(item.Arect)
-      }));
-
-      const Ggt = invert3x3(Hgt);
-      return (state.validatedAffinities || []).map((item, idx) => {
-        const y = [Number(item.center.x), Number(item.center.y)];
-        const xgt = Ggt ? applyHomographyPoint(Ggt, y) : null;
-        const JHgt = xgt ? jacobianHomographyAtInput(Hgt, xgt[0], xgt[1]) : null;
-        const JGgt = Ggt ? jacobianHomographyAtInput(Ggt, y[0], y[1]) : null;
-
-        const eAfro = mat2FrobeniusError(item.M, JHgt);
-        const eArel = mat2RelativeFrobeniusError(item.M, JHgt);
-        const eInvFro = mat2FrobeniusError(item.Arect, JGgt);
-        const eInvRel = mat2RelativeFrobeniusError(item.Arect, JGgt);
-
-        let matchedCenterError = null;
-        if (xgt && item.referenceCenter && isFinitePoint(item.referenceCenter)) {
-          matchedCenterError = Math.hypot(
-            Number(item.referenceCenter.x) - xgt[0],
-            Number(item.referenceCenter.y) - xgt[1]
-          );
-        }
-
-        return {
-          id: idx + 1,
-          gt_available: true,
-          deformed_patch_center_xy: exportPoint(item.center),
-          true_source_center_xy: xgt ? { x: roundNumberForExport(xgt[0]), y: roundNumberForExport(xgt[1]) } : null,
-          matched_reference_center_xy: exportPoint(item.referenceCenter),
-          matched_reference_center_error_px: roundNumberForExport(matchedCenterError),
-          patch_size_px: item.patchSize || state.patchSize,
-          selected_pair: item.pairName || null,
-          refinement_method: item.detection?.method || state.peakDetection.refinementMethod,
-          phase_correlation_score: roundNumberForExport(item.phaseScore),
-          phase_ratio_to_second: roundNumberForExport(item.phaseRatioToSecond),
-          hexagon_residual_relative: roundNumberForExport(item.residualRelative),
-          estimated_forward_affinity_A: exportMat2(item.M),
-          gt_forward_jacobian_JH: exportMat2(JHgt),
-          error_A_vs_JH_fro: roundNumberForExport(eAfro),
-          error_A_vs_JH_rel_fro: roundNumberForExport(eArel),
-          estimated_rectifying_affinity_Ainv: exportMat2(item.Arect),
-          gt_rectifying_jacobian_JG: exportMat2(JGgt),
-          error_Ainv_vs_JG_fro: roundNumberForExport(eInvFro),
-          error_Ainv_vs_JG_rel_fro: roundNumberForExport(eInvRel),
-          affinity_determinant: roundNumberForExport(mat2Det(item.M)),
-          affinity_condition_number: roundNumberForExport(mat2ConditionNumberApprox(item.M)),
-          detected_hexagon: makePeakPositionExport(item)
-        };
-      });
-    }
-
-    function aggregateLocalRobustness(localRecords) {
-      const meanFinite = (key) => {
-        const vals = (localRecords || []).map((r) => Number(r[key])).filter(Number.isFinite);
-        return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
-      };
-      return {
-        local_forward_affinity_fro_mean: roundNumberForExport(meanFinite('error_A_vs_JH_fro')),
-        local_forward_affinity_rel_fro_mean: roundNumberForExport(meanFinite('error_A_vs_JH_rel_fro')),
-        local_rectifying_affinity_fro_mean: roundNumberForExport(meanFinite('error_Ainv_vs_JG_fro')),
-        local_rectifying_affinity_rel_fro_mean: roundNumberForExport(meanFinite('error_Ainv_vs_JG_rel_fro')),
-        matched_reference_center_error_mean_px: roundNumberForExport(meanFinite('matched_reference_center_error_px')),
-        mean_patch_size_px: roundNumberForExport(meanFinite('patch_size_px'))
-      };
-    }
-
-    function makeHomographyRobustnessExportPayload() {
-      const deform = getCurrentDeformationParameters();
-      const Hgt = computeTrueDeformationHomographySourceToDisplayed();
-      const Ggt = Hgt ? invert3x3(Hgt) : null;
-      const HrectEst = state.globalHomography || null;
-      const HdefEst = HrectEst ? invert3x3(HrectEst) : null;
-      const localRecords = computeLocalRobustnessRecords(Hgt);
-      const localSummary = aggregateLocalRobustness(localRecords);
-      const transfer = computeHomographyTransferMetrics(Hgt, HdefEst, 21);
 
       return {
-        export_version: 4,
-        experiment_type: 'homography_robustness',
+        export_version: 3,
         created_at: new Date().toISOString(),
-        suggested_folder_name: buildTextureExperimentFolderName(),
-        suggested_filename: buildRobustnessResultFilename(),
-
-        texture_parameters_fixed: {
+        image_size_px: {
+          width: state.size,
+          height: state.size
+        },
+        projection_mode: deform.mode,
+        deformation_parameters: deform.parameters,
+        texture_parameters: {
           black_occupancy: state.texture.occupancy,
           dilation_radius: state.texture.dilation,
           shift_angle_deg: state.texture.angleShiftDeg,
           shift_norm_px: state.texture.normShift,
-          gaussian_blur_sigma: state.texture.blurSigma
+          gaussian_blur_sigma: state.texture.blurSigma,
+          real_mode_shifts_xy_px: {
+            U: exportVec2([state.realShifts.uX, state.realShifts.uY]),
+            V: exportVec2([state.realShifts.vX, state.realShifts.vY]),
+            note: state.testMode === 'real'
+              ? 'These manually entered shifts are used for real-mode affinity estimation and rectification.'
+              : 'Synthetic mode uses shift_angle_deg and shift_norm_px.'
+          }
         },
-
-        detector_parameters_fixed: {
-          autocorrelation: "circular_fft_centered_unit_energy_fftshift",
-          k: state.peakDetection.k,
-          nms_size: state.peakDetection.nmsSize,
-          exclude_center_radius: state.peakDetection.excludeCenterRadius,
-          relative_peak_threshold: state.peakDetection.relativePeakThreshold,
-          min_separation: state.peakDetection.minSeparation,
-          energy_blur_sigma: state.peakDetection.energyBlurSigma,
-          fit_radius: state.peakDetection.fitRadius,
-          search_radius: state.peakDetection.searchRadius,
-          refinement_method: state.peakDetection.refinementMethod,
-          tps_lambda: state.peakDetection.tpsLambda,
-          kappa_max: state.peakDetection.kappaMax,
-          affinity_residual_max: state.peakDetection.affinityResidualMax,
-          phase_ratio_min: state.peakDetection.phaseRatioMin,
-          manual_patch_size_selection: true,
-          automatic_multiscale_search: false
+        original_shifts_source_px: {
+          convention: 'xy, in the undeformed/source texture',
+          U: exportVec2(U),
+          V: exportVec2(V),
+          W_U_minus_V: exportVec2(W),
+          minus_U: exportVec2([-U[0], -U[1]]),
+          minus_V: exportVec2([-V[0], -V[1]]),
+          minus_W: exportVec2([-W[0], -W[1]])
         },
-
-        deformation: {
-          projection_mode: deform.mode,
-          parameters: deform.parameters
-        },
-
-        estimation: {
+        rectification_details: {
           validated_affinities_count: state.validatedAffinities.length,
-          estimated_rectifying_homography_deformed_to_source: exportMat3(HrectEst),
-          estimated_deformation_homography_source_to_deformed: exportMat3(HdefEst),
-          rectification_solver_info: state.globalHomographyInfo || null,
-          rectification_visualized: Boolean(state.rectificationEnabled || state.differenceEnabled),
-          photometric_rectification_mae_gray: roundNumberForExport(
-            meanAbsoluteGrayDifference(state.sourceImageData, state.rectificationImageData)
-          )
+          rectification_enabled: Boolean(state.rectificationEnabled),
+          has_rectification_image: Boolean(state.rectificationImageData),
+          geometric_deformation_error_200x200_px: computePixelRectificationError200x200(),
+          global_homography_comparison: computeGlobalHomographyComparison(),
+          rectification_solver_info: state.globalHomographyInfo || null
         },
-
-        ground_truth_evaluation_only: {
-          available: Boolean(Hgt),
-          true_deformation_homography_source_to_deformed: exportMat3(Hgt),
-          true_rectifying_homography_deformed_to_source: exportMat3(Ggt),
-          note: 'Ground truth in this block is computed only when saving the robustness result.'
-        },
-
-        errors: {
-          normalized_homography_frobenius_error_source_to_deformed: roundNumberForExport(
-            normalizedHomographyFrobeniusError(HdefEst, Hgt)
-          ),
-          transfer_metrics: transfer,
-          ...localSummary
-        },
-
-        local_affinities: localRecords
+        validated_count: state.validatedAffinities.length,
+        validated_patches: state.validatedAffinities.map((item, idx) => ({
+          id: idx + 1,
+          deformed_patch_center_xy: exportPoint(item.center),
+          matched_reference_center_xy: exportPoint(item.referenceCenter),
+          seed_reference_center_xy: exportPoint(item.referenceCenterSeed),
+          patch_size_px: item.patchSize || state.patchSize,
+          selected_pair: item.pairName || null,
+          selected_pair_indices_in_ordered_hexagon: item.pairIndices || null,
+          assignment_mode: item.assignmentMode || null,
+          order_preserving_cyclic_shift: item.orderShift === undefined ? null : item.orderShift,
+          order_preserving_assignment: item.assignment || null,
+          phase_correlation_score: roundNumberForExport(item.phaseScore),
+          found_shifts_selected_xy_patch_px: {
+            Uobs: exportVec2(item.Uobs),
+            Vobs: exportVec2(item.Vobs)
+          },
+          original_shifts_used_for_affinity_xy_source_px: {
+            Uref: exportVec2(item.Uref),
+            Vref: exportVec2(item.Vref)
+          },
+          local_forward_affinity_M_source_to_deformed: exportMat2(item.M),
+          local_rectification_A_inverse_deformed_to_source: exportMat2(item.Arect),
+          reference_phase_peak_xy: exportVec2(item.referencePeakXY),
+          reference_shift_xy: exportVec2(item.referenceShiftXY),
+          detected_hexagon: makePeakPositionExport(item),
+          detection_quality: item.detection ? {
+            energy: roundNumberForExport(item.detection.energy ?? item.detection.E ?? item.detection.e_fin),
+            score: roundNumberForExport(item.detection.score),
+            ok: item.detection.ok === undefined ? null : Boolean(item.detection.ok)
+          } : null
+        }))
       };
     }
 
@@ -4972,55 +4575,17 @@
       }, 0);
     }
 
-    async function saveTextIntoExperimentFolder(folderName, filename, text) {
-      // Chromium browsers can create/use a real directory chosen by the user.
-      // Safari currently falls back to a normal download; the JSON still stores
-      // the exact suggested folder name so it can be grouped manually.
-      if (typeof window.showDirectoryPicker === 'function') {
-        try {
-          if (!window.__homographyRobustnessRootHandle) {
-            window.__homographyRobustnessRootHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
-          }
-          const dir = await window.__homographyRobustnessRootHandle.getDirectoryHandle(folderName, { create: true });
-          const fh = await dir.getFileHandle(filename, { create: true });
-          const writable = await fh.createWritable();
-          await writable.write(text);
-          await writable.close();
-          return { mode: 'directory', folderName, filename };
-        } catch (err) {
-          if (err && err.name === 'AbortError') return { mode: 'cancelled', folderName, filename };
-          console.warn('Directory save unavailable; falling back to download.', err);
-        }
-      }
-
-      downloadTextFile(filename, text, 'application/json');
-      return { mode: 'download', folderName, filename };
-    }
-
-    async function saveValidatedPeaksDetails() {
+    function saveValidatedPeaksDetails() {
       if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage('No validated affinity to save. Validate the patches first.');
+        setValidationMessage('No validated peak to save. Validate at least one affinity first.');
         return;
       }
-      if (!state.globalHomography) {
-        setValidationMessage('No global rectification yet. Validate enough affinities and verify Rectify first.');
-        return;
-      }
-      const payload = makeHomographyRobustnessExportPayload();
-      const text = JSON.stringify(payload, null, 2);
-      const result = await saveTextIntoExperimentFolder(
-        payload.suggested_folder_name,
-        payload.suggested_filename,
-        text
-      );
-
-      if (result.mode === 'directory') {
-        setValidationMessage(`Saved robustness result: ${result.folderName}/${result.filename}`);
-      } else if (result.mode === 'download') {
-        setValidationMessage(`Downloaded ${result.filename}. Put it in folder: ${result.folderName}`);
-      } else {
-        setValidationMessage('Robustness result save cancelled.');
-      }
+      const payload = makeValidatedPeaksExportPayload();
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const baseName = buildDeformationFilenameBase();
+      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
+      downloadTextFile(filename, JSON.stringify(payload, null, 2), 'application/json');
+      setValidationMessage(`Download started: ${filename}`);
     }
 
     // =========================================================
@@ -5138,23 +4703,7 @@
     }
 
     if (btnValidateAffinity) {
-      btnValidateAffinity.addEventListener("click", () => {
-        if (btnValidateAffinity.disabled) return;
-        btnValidateAffinity.disabled = true;
-        setValidationMessage("Validating affinity...");
-        setTimeout(() => {
-          try {
-            validateCurrentAffinity();
-          } catch (err) {
-            console.error("Validate Affinity failed", err);
-            setValidationMessage(`Validation error: ${err && err.message ? err.message : err}`);
-          } finally {
-            btnValidateAffinity.disabled = false;
-            refreshRectificationUI();
-            redrawMainCanvas();
-          }
-        }, 20);
-      });
+      btnValidateAffinity.addEventListener("click", () => validateCurrentAffinity());
     }
 
     if (btnToggleRectification) {
@@ -5255,28 +4804,6 @@
         refreshControlLabels();
         if (state.autocorrEnabled) schedulePreviewRender();
         else redrawMainCanvas();
-      });
-    }
-
-    if (peakRefinementMethod) {
-      peakRefinementMethod.addEventListener("change", () => {
-        state.peakDetection.refinementMethod =
-          String(peakRefinementMethod.value).toLowerCase() === "tps" ? "tps" : "quadratic";
-        state.lastDetection = null;
-        state.lastAffinityEstimate = null;
-        refreshControlLabels();
-        if (state.autocorrEnabled && state.peaksEnabled) schedulePreviewRender();
-      });
-    }
-
-    if (tpsLambdaControl) {
-      tpsLambdaControl.addEventListener("change", () => {
-        const v = Number(tpsLambdaControl.value);
-        if (Number.isFinite(v) && v >= 0) state.peakDetection.tpsLambda = v;
-        state.lastDetection = null;
-        state.lastAffinityEstimate = null;
-        refreshControlLabels();
-        if (state.autocorrEnabled && state.peaksEnabled) schedulePreviewRender();
       });
     }
 

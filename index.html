@@ -1,4 +1,4 @@
-<!-- Derived directly from user-provided index-10.html; minimal PhD robustness patch. -->
+<!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -454,25 +454,6 @@
 
     .footer a {
       font-weight: 600;
-    }
-
-    .thesis-select,
-    .thesis-number-input {
-      grid-column: 1 / -1;
-      width: 100%;
-      border: 1px solid rgba(15, 23, 42, 0.16);
-      border-radius: 10px;
-      padding: 0.55rem 0.65rem;
-      font: inherit;
-      color: #0f172a;
-      background: #f8fafc;
-    }
-
-    .thesis-select:focus,
-    .thesis-number-input:focus {
-      outline: 2px solid rgba(37, 99, 235, 0.25);
-      background: white;
-      border-color: rgba(37, 99, 235, 0.45);
     }
 
     @media screen and (max-width: 1180px) {
@@ -1032,7 +1013,7 @@
 
             <button id="btn-save-peaks-details" class="button is-success is-light is-rounded">
               <span class="icon"><i class="fas fa-download"></i></span>
-              <span>Save Homography Robustness Result</span>
+              <span>Save Deformation Details</span>
             </button>
 
             <button id="btn-clear-affinities" class="button is-light is-rounded">
@@ -1086,20 +1067,6 @@
                     <span id="val-patch-slider" class="control-value">90 px</span>
                     <input id="patch-size-control" type="range" min="32" max="140" step="2" value="90">
                   </div>
-
-                  <div class="control-row">
-                    <span>Peak refinement</span>
-                    <select id="peak-refinement-method" class="thesis-select" aria-label="Peak refinement method">
-                      <option value="quadratic" selected>Quadratic joint energy</option>
-                      <option value="tps">TPS joint energy</option>
-                    </select>
-                  </div>
-
-                  <div class="control-row">
-                    <span>TPS λ</span>
-                    <span id="val-tps-lambda" class="control-value">0.001</span>
-                    <input id="tps-lambda-control" class="thesis-number-input" type="number" min="0" step="0.0001" value="0.001">
-                  </div>
                 </div>
               </div>
             </aside>
@@ -1132,8 +1099,9 @@
                 Utilise la <strong>molette</strong> pour changer la taille du patch.
                 Clique sur les <strong>valeurs bleues</strong> des sliders pour entrer une valeur exacte.
                 Utilise <strong>S</strong> pour alterner entre <strong>Autocorrelation</strong> et <strong>Laplacian of Autocorrelation</strong>.
-                Verrouille d’abord le patch, puis clique une seule fois sur <strong>Detect Peaks</strong>. Tant que ce mode reste actif, ajuste manuellement la taille du patch : l’autocorrélation et l’hexagone détecté sont recalculés automatiquement à chaque changement de taille. Garde le <strong>plus petit patch</strong> pour lequel les six pics restent fiables, puis clique sur <strong>Validate Affinity</strong>.
-                Le raffinement sous-pixellique joint peut être choisi entre <strong>Quadratic</strong> et <strong>TPS</strong>. Répète l’opération sur plusieurs zones. Après validation des affinités, utilise <strong>Rectify</strong>, puis le même bouton pour <strong>Show Difference</strong> et <strong>Show Deformed</strong>. Enfin, <strong>Save Homography Robustness Result</strong> enregistre uniquement les résultats et les GT d’évaluation de la déformation courante.
+                Utilise <strong>Detect Peaks</strong> pour afficher uniquement les pics trouvés.
+                Clique pour <strong>verrouiller</strong> un patch, ajuste sa taille, puis clique sur <strong>Validate Affinity</strong> quand les pics affichés par <strong>Detect Peaks</strong> sont corrects.
+                Répète l’opération sur plusieurs zones. À chaque validation, la paire d’affinité est choisie automatiquement parmi les 6 possibilités par corrélation de phase avec l’image originale. Utilise <strong>Show Rectified Patches</strong> pour vérifier localement chaque patch redressé, puis active <strong>Rectify</strong> pour le redressement global.
                 Utilise <strong>← / →</strong> pour changer le contraste d’affichage dans la fenêtre.
               </p>
             </div>

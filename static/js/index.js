@@ -111,6 +111,11 @@
     const texShift = document.getElementById("tex-shift");
     const texBlur = document.getElementById("tex-blur");
     const patchSizeControl = document.getElementById("patch-size-control");
+    const peakRefinementMethod = document.getElementById("peak-refinement-method");
+    const tpsLambdaControl = document.getElementById("tps-lambda-control");
+    const valTpsLambda = document.getElementById("val-tps-lambda");
+    const btnRecordHomographyTest = document.getElementById("btn-record-homography-test");
+    const btnExportHomographyTests = document.getElementById("btn-export-homography-tests");
 
     const valOccupancy = document.getElementById("val-occupancy");
     const valDilation = document.getElementById("val-dilation");
@@ -265,38 +270,34 @@
       shoulder: { ...DEFAULTS.shoulder },
       crumpled: { ...DEFAULTS.crumpled },
       twoPlanes: { ...DEFAULTS.twoPlanes },
-      previewComputeSize: 64,
       centerBlendRadius: 6,
 
       // ---------------------------------------------------------
-      // Equivalent JS des kwargs de find_hexagon / stable patch.
-      // Tu peux modifier ces valeurs directement ici.
+      // Détecteur canonique conforme au document de thèse.
+      // Les maxima NMS restent ENTIERS. Le sous-pixel est uniquement joint.
       // ---------------------------------------------------------
       peakDetection: {
-        // Détection des maxima locaux dans l'autocorr
         k: 80,
         nmsSize: 9,
         excludeCenterRadius: 7.0,
         minSeparation: 3.0,
-
-        // Sélection du meilleur couple (u, v)
-        energyHalfwin: 2.0,
+        relativePeakThreshold: 0.05,
         minDist: 3.0,
         antipodalTol: 2.0,
         angleMinDeg: 12.0,
         wExcludeCenterRadius: 7.0,
-
-        // Raffinement sous-pixelique simple 3x3
-        refineSubpixel: true,
-
-        // Si true, lance une version multi-échelles inspirée de
-        // find_min_stable_patch_size_centered. Plus lent.
-        useStablePatch: false,
-        minPs: 40,
-        maxPs: 140,
-        step: 4,
-        stableSeqLen: 3,
-        stableTol: 1.0
+        energyBlurSigma: 1.0,
+        fitRadius: 2,
+        searchRadius: 1.5,
+        refinementMethod: "quadratic",
+        tpsLambda: 0.001,
+        tpsCoarseSteps: 3,
+        tpsMultiStarts: 6,
+        detMin: 1e-8,
+        kappaMax: 8.0,
+        affinityResidualMax: 0.20,
+        phaseAbsoluteMin: 0.0,
+        phaseRatioMin: 2.0
       },
 
       lastDetection: null,
@@ -314,6 +315,7 @@
       globalHomography: null,
       globalHomographyInfo: null,
       lastAffinityEstimate: null,
+      homographyRobustnessRecords: [],
       sourceGrayCache: null,
       sourcePhaseReferenceCache: null,
 
@@ -1917,24 +1919,17 @@
     function computeHexagonDetectionAtPoint(cx, cy, patchSize) {
       if (!state.displayedImageData) return null;
       const ps = Math.round(clamp(patchSize || state.patchSize, 32, 140));
-      const computeSize = Math.min(state.previewComputeSize, ps);
+      const computeSize = ps;
       const patch = extractPatchGrayResampled(state.displayedImageData, cx, cy, ps, computeSize);
       const ac = computeAutocorrelation2D(patch, computeSize);
-      const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
-      return findHexagonJS(
-        ac,
-        computeSize,
-        state.peakDetection,
-        theoreticalInfo.U_ref_rc,
-        theoreticalInfo.V_ref_rc
-      );
+      return findHexagonJS(ac, computeSize, state.peakDetection);
     }
 
     function estimateAffinityAtPointUsingPredictedModel(cx, cy, patchSize, predictedM) {
       const detection = computeHexagonDetectionAtPoint(cx, cy, patchSize);
       if (!detection || !detection.u_fin || !detection.v_fin || !detection.w_fin) return null;
 
-      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const computeSize = patchSize;
       const scale = patchSize / computeSize;
       const ordered6 = buildOrdered6CandidatesXY(detection, scale);
       const refs = getTextureShiftVectorsSourcePx();
@@ -2333,7 +2328,7 @@
     function getDisplayedDetectionForValidation() {
       const p = getActivePatchCenter();
       const patchSize = state.patchSize;
-      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const computeSize = patchSize;
       if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin && state.lastDetection.w_fin) {
         return { detection: state.lastDetection, computeSize, center: p };
       }
@@ -2390,352 +2385,60 @@
       ];
     }
 
+    function solveAffinitySixVertices(refVectors, obsVectors, weights = null) {
+      const w = weights || [1,1,1,1,1,1];
+      let rr00=0, rr01=0, rr11=0;
+      let dr00=0, dr01=0, dr10=0, dr11=0;
+      for (let k=0;k<6;k++) {
+        const wk=Number(w[k]); const r=refVectors[k]; const d=obsVectors[k];
+        rr00 += wk*r[0]*r[0]; rr01 += wk*r[0]*r[1]; rr11 += wk*r[1]*r[1];
+        dr00 += wk*d[0]*r[0]; dr01 += wk*d[0]*r[1];
+        dr10 += wk*d[1]*r[0]; dr11 += wk*d[1]*r[1];
+      }
+      const detR = rr00*rr11-rr01*rr01;
+      if (!Number.isFinite(detR) || Math.abs(detR)<1e-12) return null;
+      const inv00=rr11/detR, inv01=-rr01/detR, inv11=rr00/detR;
+      const M=[
+        [dr00*inv00+dr01*inv01, dr00*inv01+dr01*inv11],
+        [dr10*inv00+dr11*inv01, dr10*inv01+dr11*inv11]
+      ];
+      let num=0, den=0, meanSq=0, sw=0;
+      for (let k=0;k<6;k++) {
+        const wk=Number(w[k]); const r=refVectors[k]; const d=obsVectors[k];
+        const pred=mat2MulVec(M,r); const ex=d[0]-pred[0], ey=d[1]-pred[1];
+        num += wk*(ex*ex+ey*ey); den += wk*(d[0]*d[0]+d[1]*d[1]);
+        meanSq += wk*(ex*ex+ey*ey); sw += wk;
+      }
+      return { M, residualRelative: Math.sqrt(num)/(Math.sqrt(den)+1e-12), residualHexMeanSq: meanSq/Math.max(sw,1e-12) };
+    }
+
     function buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref) {
       const refSorted = sortHexagonByAngle(buildReferenceHexagonPeaksXY(Uref, Vref));
       const obsSorted = sortHexagonByAngle(observedPeaks);
       const candidates = [];
-
-      // Your colleague's assignment observation: if there is no reflection and no
-      // aliasing, the observed deformed hexagon keeps the same circular order and
-      // same rotation sense as the original hexagon, up to a cyclic shift. Hence
-      // there are only six cyclic assignments to test.
-      for (let shift = 0; shift < 6; shift++) {
-        const map = new Map();
-        const assignment = [];
-        for (let k = 0; k < 6; k++) {
-          const refPeak = refSorted[k];
-          const obsPeak = obsSorted[(k + shift) % 6];
-          map.set(refPeak.refKey, obsPeak);
-          assignment.push({
-            ref: refPeak.shortLabel,
-            obs: obsPeak.shortLabel,
-            refAngle: angleXY(refPeak.vec),
-            obsAngle: angleXY(obsPeak.vec)
-          });
+      for (let shift=0;shift<6;shift++) {
+        const refs=[]; const obs=[]; const assignment=[];
+        for (let k=0;k<6;k++) {
+          const r=refSorted[k]; const d=obsSorted[(k+shift)%6];
+          refs.push(r.vec); obs.push(d.vec);
+          assignment.push({ref:r.shortLabel,obs:d.shortLabel,refAngle:angleXY(r.vec),obsAngle:angleXY(d.vec)});
         }
-
-        const obsForU = map.get("+U");
-        const obsForV = map.get("+V");
-        if (!obsForU || !obsForV) continue;
-        const M = solve2x2ForColumns(Uref, Vref, obsForU.vec, obsForV.vec);
-        if (!M) continue;
-
+        const fit=solveAffinitySixVertices(refs,obs);
+        if (!fit) continue;
         candidates.push({
-          orderShift: shift,
+          orderShift:shift,
           assignment,
-          Uobs: obsForU.vec,
-          Vobs: obsForV.vec,
-          pairIndices: [obsForU.index, obsForV.index],
-          pairName: `${obsForU.shortLabel}→+U, ${obsForV.shortLabel}→+V`,
-          assignmentMode: "order_preserving_same_rotation_sense"
+          assignmentMode:"order_preserving_same_rotation_sense_six_vertex_ls",
+          M:fit.M,
+          residualRelative:fit.residualRelative,
+          residualHexMeanSq:fit.residualHexMeanSq,
+          pairName:`cyclic shift ${shift}`,
+          pairIndices:null,
+          Uobs:null,
+          Vobs:null
         });
       }
       return candidates;
-    }
-
-    function extractGrayPatchArray(imageData, cx, cy, patchSize) {
-      const out = new Float64Array(patchSize * patchSize);
-      const half = patchSize / 2;
-      let k = 0;
-      for (let j = 0; j < patchSize; j++) {
-        const yy = cy - half + (j + 0.5);
-        for (let i = 0; i < patchSize; i++) {
-          const xx = cx - half + (i + 0.5);
-          out[k++] = sampleGrayBilinear(imageData, xx, yy, 255);
-        }
-      }
-      return out;
-    }
-
-    function rectifyPatchWithMatrix(imageData, cx, cy, patchSize, M) {
-      const out = new Float64Array(patchSize * patchSize);
-      const half = patchSize / 2;
-      let k = 0;
-      for (let j = 0; j < patchSize; j++) {
-        const dy = (j + 0.5) - half;
-        for (let i = 0; i < patchSize; i++) {
-          const dx = (i + 0.5) - half;
-          const sx = cx + M[0][0] * dx + M[0][1] * dy;
-          const sy = cy + M[1][0] * dx + M[1][1] * dy;
-          out[k++] = sampleGrayBilinear(imageData, sx, sy, 255);
-        }
-      }
-      return out;
-    }
-
-
-    function makePatchCanvasFromGrayArray(gray, patchSize, displaySize = 128) {
-      const c = document.createElement("canvas");
-      c.width = Math.max(32, Math.min(256, Math.round(displaySize)));
-      c.height = c.width;
-      const cctx = c.getContext("2d", { willReadFrequently: true });
-      const img = new ImageData(c.width, c.height);
-      for (let y = 0; y < c.height; y++) {
-        const sy = ((y + 0.5) / c.height) * patchSize - 0.5;
-        const y0 = Math.floor(sy);
-        const y1 = Math.min(patchSize - 1, Math.max(0, y0 + 1));
-        const fy = sy - y0;
-        const yy0 = Math.min(patchSize - 1, Math.max(0, y0));
-        for (let x = 0; x < c.width; x++) {
-          const sx = ((x + 0.5) / c.width) * patchSize - 0.5;
-          const x0 = Math.floor(sx);
-          const x1 = Math.min(patchSize - 1, Math.max(0, x0 + 1));
-          const fx = sx - x0;
-          const xx0 = Math.min(patchSize - 1, Math.max(0, x0));
-          const v00 = gray[yy0 * patchSize + xx0] ?? 255;
-          const v10 = gray[yy0 * patchSize + x1] ?? 255;
-          const v01 = gray[y1 * patchSize + xx0] ?? 255;
-          const v11 = gray[y1 * patchSize + x1] ?? 255;
-          const v0 = v00 * (1 - fx) + v10 * fx;
-          const v1 = v01 * (1 - fx) + v11 * fx;
-          const v = clamp(v0 * (1 - fy) + v1 * fy, 0, 255);
-          const idx = (y * c.width + x) * 4;
-          img.data[idx] = v;
-          img.data[idx + 1] = v;
-          img.data[idx + 2] = v;
-          img.data[idx + 3] = 255;
-        }
-      }
-      cctx.putImageData(img, 0, 0);
-      return c;
-    }
-
-    function appendPatchThumb(parent, label, gray, patchSize) {
-      const wrap = document.createElement("div");
-      wrap.className = "patch-thumb-wrap";
-      const canvasThumb = makePatchCanvasFromGrayArray(gray, patchSize, 128);
-      const caption = document.createElement("div");
-      caption.textContent = label;
-      wrap.appendChild(canvasThumb);
-      wrap.appendChild(caption);
-      parent.appendChild(wrap);
-    }
-
-    function refreshPatchViewButton() {
-      if (!btnTogglePatchView) return;
-      btnTogglePatchView.classList.toggle("is-link", state.patchViewEnabled);
-      btnTogglePatchView.classList.toggle("is-light", !state.patchViewEnabled);
-      const textSpan = btnTogglePatchView.querySelector("span:last-child");
-      if (textSpan) textSpan.textContent = state.patchViewEnabled ? "Hide Rectified Patches" : "Show Rectified Patches";
-    }
-
-    function renderValidatedPatchesPanel() {
-      if (!patchViewPanel || !patchViewGrid) return;
-      patchViewPanel.classList.toggle("is-active", state.patchViewEnabled);
-      refreshPatchViewButton();
-      patchViewGrid.innerHTML = "";
-
-      if (!state.patchViewEnabled) return;
-
-      const n = state.validatedAffinities.length;
-      if (patchViewSummary) {
-        patchViewSummary.textContent = n
-          ? `${n} validated patch${n > 1 ? "es" : ""}. Each row shows the best matching reference crop found in the whole reference image, the deformed patch, and the locally rectified patch.`
-          : "No validated patch yet.";
-      }
-
-      if (!n) {
-        const empty = document.createElement("div");
-        empty.className = "patch-card";
-        empty.textContent = "Validate at least one affinity to see its local rectification.";
-        patchViewGrid.appendChild(empty);
-        return;
-      }
-
-      state.validatedAffinities.forEach((item, idx) => {
-        const patchSize = item.patchSize || state.patchSize;
-        if (!item.sourcePatch || !item.deformedPatch || !item.rectifiedPatch) return;
-
-        const card = document.createElement("div");
-        card.className = "patch-card";
-
-        const title = document.createElement("div");
-        title.className = "patch-card-title";
-        title.textContent = `Patch ${idx + 1}`;
-
-        const meta = document.createElement("div");
-        meta.className = "patch-card-meta";
-        const cx = item.center ? item.center.x.toFixed(1) : "?";
-        const cy = item.center ? item.center.y.toFixed(1) : "?";
-        const score = Number.isFinite(item.phaseScore) ? item.phaseScore.toFixed(4) : "n/a";
-        const rcx = item.referenceCenter ? item.referenceCenter.x.toFixed(1) : "?";
-        const rcy = item.referenceCenter ? item.referenceCenter.y.toFixed(1) : "?";
-        const srcx = item.referenceCenterSeed ? item.referenceCenterSeed.x.toFixed(1) : "?";
-        const srcy = item.referenceCenterSeed ? item.referenceCenterSeed.y.toFixed(1) : "?";
-        meta.textContent = `def center=(${cx}, ${cy}) · matched ref center=(${rcx}, ${rcy}) · seed ref center=(${srcx}, ${srcy}) · size=${patchSize}px · pair=${item.pairName || "?"} · phase corr=${score}`;
-
-        const triplet = document.createElement("div");
-        triplet.className = "patch-triplet";
-        appendPatchThumb(triplet, "reference (best full-image match)", item.sourcePatch, patchSize);
-        appendPatchThumb(triplet, "deformed", item.deformedPatch, patchSize);
-        appendPatchThumb(triplet, "rectified", item.rectifiedPatch, patchSize);
-
-        card.appendChild(title);
-        card.appendChild(meta);
-        card.appendChild(triplet);
-        patchViewGrid.appendChild(card);
-      });
-    }
-
-    function nextPow2(n) {
-      let p = 1;
-      while (p < n) p <<= 1;
-      return p;
-    }
-
-    function fft1d(re, im, inverse = false) {
-      const n = re.length;
-      let j = 0;
-      for (let i = 1; i < n; i++) {
-        let bit = n >> 1;
-        while (j & bit) { j ^= bit; bit >>= 1; }
-        j ^= bit;
-        if (i < j) {
-          let tr = re[i]; re[i] = re[j]; re[j] = tr;
-          let ti = im[i]; im[i] = im[j]; im[j] = ti;
-        }
-      }
-      for (let len = 2; len <= n; len <<= 1) {
-        const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
-        const wlenCos = Math.cos(ang);
-        const wlenSin = Math.sin(ang);
-        for (let i = 0; i < n; i += len) {
-          let wCos = 1.0, wSin = 0.0;
-          for (let j2 = 0; j2 < len / 2; j2++) {
-            const uRe = re[i + j2], uIm = im[i + j2];
-            const vRe0 = re[i + j2 + len / 2], vIm0 = im[i + j2 + len / 2];
-            const vRe = vRe0 * wCos - vIm0 * wSin;
-            const vIm = vRe0 * wSin + vIm0 * wCos;
-            re[i + j2] = uRe + vRe;
-            im[i + j2] = uIm + vIm;
-            re[i + j2 + len / 2] = uRe - vRe;
-            im[i + j2 + len / 2] = uIm - vIm;
-            const nwCos = wCos * wlenCos - wSin * wlenSin;
-            const nwSin = wCos * wlenSin + wSin * wlenCos;
-            wCos = nwCos; wSin = nwSin;
-          }
-        }
-      }
-      if (inverse) {
-        for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
-      }
-    }
-
-    function fft2d(re, im, w, h, inverse = false) {
-      const rowRe = new Float64Array(w);
-      const rowIm = new Float64Array(w);
-      for (let y = 0; y < h; y++) {
-        const off = y * w;
-        for (let x = 0; x < w; x++) { rowRe[x] = re[off + x]; rowIm[x] = im[off + x]; }
-        fft1d(rowRe, rowIm, inverse);
-        for (let x = 0; x < w; x++) { re[off + x] = rowRe[x]; im[off + x] = rowIm[x]; }
-      }
-      const colRe = new Float64Array(h);
-      const colIm = new Float64Array(h);
-      for (let x = 0; x < w; x++) {
-        for (let y = 0; y < h; y++) {
-          const idx = y * w + x;
-          colRe[y] = re[idx]; colIm[y] = im[idx];
-        }
-        fft1d(colRe, colIm, inverse);
-        for (let y = 0; y < h; y++) {
-          const idx = y * w + x;
-          re[idx] = colRe[y]; im[idx] = colIm[y];
-        }
-      }
-    }
-
-    function phaseCorrelationScoreArrays(a, b, w, h) {
-      const N = nextPow2(Math.max(w, h));
-      const size = N * N;
-      const ar = new Float64Array(size), ai = new Float64Array(size);
-      const br = new Float64Array(size), bi = new Float64Array(size);
-      let meanA = 0.0, meanB = 0.0;
-      for (let i = 0; i < a.length; i++) meanA += a[i];
-      for (let i = 0; i < b.length; i++) meanB += b[i];
-      meanA /= Math.max(1, a.length);
-      meanB /= Math.max(1, b.length);
-      for (let y = 0; y < h; y++) {
-        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
-        for (let x = 0; x < w; x++) {
-          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
-          const win = wx * wy;
-          const idx0 = y * w + x;
-          const idx = y * N + x;
-          ar[idx] = (a[idx0] - meanA) * win;
-          br[idx] = (b[idx0] - meanB) * win;
-        }
-      }
-      fft2d(ar, ai, N, N, false);
-      fft2d(br, bi, N, N, false);
-      const cr = new Float64Array(size), ci = new Float64Array(size);
-      for (let i = 0; i < size; i++) {
-        const re = ar[i] * br[i] + ai[i] * bi[i];
-        const im = ai[i] * br[i] - ar[i] * bi[i];
-        const mag = Math.hypot(re, im);
-        if (mag > 1e-12) {
-          cr[i] = re / mag;
-          ci[i] = im / mag;
-        } else {
-          cr[i] = 0.0;
-          ci[i] = 0.0;
-        }
-      }
-      fft2d(cr, ci, N, N, true);
-      let best = -Infinity;
-      for (let i = 0; i < size; i++) {
-        const v = Math.hypot(cr[i], ci[i]);
-        if (v > best) best = v;
-      }
-      return best;
-    }
-
-    function getSourceGrayArray() {
-      if (!state.sourceImageData) return null;
-      if (state.sourceGrayCache && state.sourceGrayCache.width === state.sourceImageData.width && state.sourceGrayCache.height === state.sourceImageData.height) {
-        return state.sourceGrayCache.gray;
-      }
-      const w = state.sourceImageData.width;
-      const h = state.sourceImageData.height;
-      const out = new Float64Array(w * h);
-      const data = state.sourceImageData.data;
-      for (let i = 0, k = 0; i < data.length; i += 4, k++) {
-        out[k] = data[i];
-      }
-      state.sourceGrayCache = { width: w, height: h, gray: out };
-      return out;
-    }
-
-    function buildWindowedReferenceFFTCache() {
-      if (!state.sourceImageData) return null;
-      const w = state.sourceImageData.width;
-      const h = state.sourceImageData.height;
-      const N = nextPow2(Math.max(w, h));
-      const cached = state.sourcePhaseReferenceCache;
-      if (cached && cached.width === w && cached.height === h && cached.N === N) return cached;
-
-      const gray = getSourceGrayArray();
-      const size = N * N;
-      const re = new Float64Array(size);
-      const im = new Float64Array(size);
-
-      let mean = 0.0;
-      for (let i = 0; i < gray.length; i++) mean += gray[i];
-      mean /= Math.max(1, gray.length);
-
-      for (let y = 0; y < h; y++) {
-        const wy = 0.5 - 0.5 * Math.cos((2 * Math.PI * y) / Math.max(1, h - 1));
-        for (let x = 0; x < w; x++) {
-          const wx = 0.5 - 0.5 * Math.cos((2 * Math.PI * x) / Math.max(1, w - 1));
-          const idx0 = y * w + x;
-          const idx = y * N + x;
-          re[idx] = (gray[idx0] - mean) * wx * wy;
-        }
-      }
-
-      fft2d(re, im, N, N, false);
-      state.sourcePhaseReferenceCache = { width: w, height: h, N, re, im };
-      return state.sourcePhaseReferenceCache;
     }
 
     function phaseCorrelatePatchAgainstWholeReference(patchGray, patchW, patchH) {
@@ -2874,75 +2577,45 @@
       return M;
     }
 
-    function getValidatedMeanAffinity() {
-      return mat2Mean((state.validatedAffinities || [])
-        .filter((a) => a && a.M && Number.isFinite(mat2Det(a.M)) && mat2Det(a.M) > 0)
-        .map((a) => a.M));
-    }
-
-    function getExpectedLocalForwardAffinity(center) {
-      // Synthetic mode: the deformation is known, so the theoretical local
-      // Jacobian is a useful way to disambiguate the six peak assignments.
-      if (state.testMode !== "real" && center && typeof sourceToDisplayJacobianAt === "function") {
-        const J = sourceToDisplayJacobianAt(center.x, center.y);
-        if (J && Number.isFinite(mat2Det(J)) && Math.abs(mat2Det(J)) > 1e-9) return J;
-      }
-
-      // Real mode: there is no synthetic projection. After the first validated
-      // patch, the already validated mean affinity becomes the only geometric
-      // prior. Before that, we keep MExpected=null so phase correlation and the
-      // manually entered shifts drive the first assignment.
-      const mean = getValidatedMeanAffinity();
-      if (mean) return mean;
-      return state.testMode === "real" ? null : [[1, 0], [0, 1]];
-    }
-
-    function geometryPenaltyForCandidate(M, MExpected, MMean) {
-      if (!M) return 1e9;
+    function geometryValidityForAffinityCandidate(candidate) {
+      if (!candidate || !candidate.M) return { valid: false, reasons: ["missing_matrix"] };
+      const M = candidate.M;
       const det = mat2Det(M);
-      if (!Number.isFinite(det)) return 1e9;
-
-      let penalty = 0;
-      // Reject flips: the orientation of the lattice should not change.
-      if (det <= 0) penalty += 1e6 + 1e5 * Math.abs(det);
-
       const cond = mat2ConditionNumberApprox(M);
-      if (!Number.isFinite(cond)) penalty += 1e6;
-      else if (cond > 8.0) penalty += (cond - 8.0) * 20.0;
-
-      const colU = Math.hypot(M[0][1], M[1][1]); // M * (0, 1), proportional to Uref
-      const colV = Math.hypot(M[0][0], M[1][0]); // M * (1, 0), proportional to Vref
-      if (colU < 0.20 || colU > 4.50) penalty += 1e5;
-      if (colV < 0.20 || colV > 4.50) penalty += 1e5;
-
-      if (MExpected) penalty += 12.0 * mat2RelativeDistance(M, MExpected);
-      if (MMean) penalty += 4.0 * mat2RelativeDistance(M, MMean);
-      return penalty;
+      const residual = Number(candidate.residualRelative);
+      const reasons = [];
+      if (!Number.isFinite(det) || det <= Number(state.peakDetection.detMin)) reasons.push("determinant");
+      if (!Number.isFinite(cond) || cond > Number(state.peakDetection.kappaMax)) reasons.push("condition_number");
+      if (!Number.isFinite(residual) || residual > Number(state.peakDetection.affinityResidualMax)) reasons.push("hexagon_residual");
+      return { valid: reasons.length === 0, reasons, det, cond, residual };
     }
 
-    function chooseBestAffinityCandidate(candidates, center) {
+    function chooseBestAffinityCandidate(candidates) {
       if (!candidates || !candidates.length) return null;
-      const MExpected = getExpectedLocalForwardAffinity(center);
-      const MMean = getValidatedMeanAffinity();
-      const maxPhase = Math.max(...candidates.map((c) => Number(c.phaseScore) || 0), 1e-9);
-
+      const geometricallyValid = [];
       for (const c of candidates) {
-        const phaseNorm = (Number(c.phaseScore) || 0) / maxPhase;
-        const penalty = geometryPenaltyForCandidate(c.M, MExpected, MMean);
-        // Geometry is intentionally dominant. Phase correlation is only a tie-breaker,
-        // because the autocorrelation texture is periodic and phase scores are often ambiguous.
-        c.geometryPenalty = penalty;
-        c.distanceToExpected = MExpected ? mat2RelativeDistance(c.M, MExpected) : null;
-        c.distanceToValidatedMean = MMean ? mat2RelativeDistance(c.M, MMean) : null;
-        c.conditionNumber = mat2ConditionNumberApprox(c.M);
-        c.det = mat2Det(c.M);
-        c.phaseScoreNormalized = phaseNorm;
-        c.selectionScore = -penalty + 0.25 * phaseNorm;
-        c.selectionReferenceM = MExpected;
+        const g = geometryValidityForAffinityCandidate(c);
+        c.geometricallyValid = g.valid;
+        c.rejectionReasons = g.reasons;
+        c.det = g.det;
+        c.conditionNumber = g.cond;
+        if (g.valid) geometricallyValid.push(c);
       }
-
-      candidates.sort((a, b) => b.selectionScore - a.selectionScore);
-      return candidates[0];
+      if (!geometricallyValid.length) return null;
+      geometricallyValid.sort((a, b) => (Number(b.phaseScore) || 0) - (Number(a.phaseScore) || 0));
+      const best = geometricallyValid[0];
+      const s1 = Number(best.phaseScore) || 0;
+      const s2 = geometricallyValid.length > 1 ? (Number(geometricallyValid[1].phaseScore) || 0) : 0;
+      const ratio = s1 / (s2 + 1e-12);
+      best.phaseRatioToSecond = ratio;
+      best.accepted = s1 >= Number(state.peakDetection.phaseAbsoluteMin) && ratio >= Number(state.peakDetection.phaseRatioMin);
+      if (!best.accepted) {
+        best.rejectionReasons = [];
+        if (s1 < Number(state.peakDetection.phaseAbsoluteMin)) best.rejectionReasons.push("phase_absolute");
+        if (ratio < Number(state.peakDetection.phaseRatioMin)) best.rejectionReasons.push("phase_ratio");
+        return null;
+      }
+      return best;
     }
 
     function estimateCurrentAffinityFromDetection() {
@@ -2962,106 +2635,54 @@
       const Vref = [refs.V[0], refs.V[1]];
       const center = { x: fresh.center.x, y: fresh.center.y };
 
-      const refCenterMapped = mapDisplayToSource(center.x, center.y);
-      const refCenterSeed = refCenterMapped || center;
-
-      const deformedPatch = extractGrayPatchArray(
-        state.displayedImageData,
-        center.x,
-        center.y,
-        state.patchSize
-      );
-      const seedReferencePatch = extractGrayPatchArray(
-        state.sourceImageData,
-        refCenterSeed.x,
-        refCenterSeed.y,
-        state.patchSize
-      );
-
+      const deformedPatch = extractGrayPatchArray(state.displayedImageData, center.x, center.y, state.patchSize);
       const assignmentCandidates = buildOrderPreservingAffinityCandidates(observedPeaks, Uref, Vref);
       const candidates = [];
 
       for (const baseCandidate of assignmentCandidates) {
-        const Uobs = baseCandidate.Uobs;
-        const Vobs = baseCandidate.Vobs;
-        const M = solve2x2ForColumns(Uref, Vref, Uobs, Vobs);
+        const M = baseCandidate.M;
         if (!M) continue;
         const Arect = mat2Inv(M);
         if (!Arect) continue;
-
-        const rectifiedPatch = rectifyPatchWithMatrix(
-          state.displayedImageData,
-          center.x,
-          center.y,
-          state.patchSize,
-          M
-        );
-
-        const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(
-          rectifiedPatch,
-          state.patchSize,
-          state.patchSize
-        );
+        const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
+        const wholeRefMatch = phaseCorrelatePatchAgainstWholeReference(rectifiedPatch, state.patchSize, state.patchSize);
         if (!wholeRefMatch) continue;
 
         candidates.push({
-          pairIndices: baseCandidate.pairIndices,
-          pairName: baseCandidate.pairName,
-          orderShift: baseCandidate.orderShift,
-          assignment: baseCandidate.assignment,
-          assignmentMode: baseCandidate.assignmentMode,
+          ...baseCandidate,
           M,
           Arect,
           phaseScore: wholeRefMatch.score,
           rectifiedPatch,
           center: { ...center },
-          referenceCenter: {
-            x: wholeRefMatch.matchedCenter.x,
-            y: wholeRefMatch.matchedCenter.y
-          },
-          referenceCenterSeed: { x: refCenterSeed.x, y: refCenterSeed.y },
+          referenceCenter: { x: wholeRefMatch.matchedCenter.x, y: wholeRefMatch.matchedCenter.y },
           referencePeakXY: wholeRefMatch.peakXY,
           referenceShiftXY: wholeRefMatch.shiftXY,
           matchedReferenceCrop: wholeRefMatch.matchedReferenceCrop,
-          sourcePatch: wholeRefMatch.matchedReferenceCrop || seedReferencePatch,
+          sourcePatch: wholeRefMatch.matchedReferenceCrop,
           deformedPatch,
           patchSize: state.patchSize,
-          Uobs,
-          Vobs,
-          Uref,
-          Vref,
           detection,
           observedPeaks,
+          Uref,
+          Vref,
           projectionMode: state.testMode === "real" ? "Real image" : state.projectionModes[state.projectionIndex]
         });
       }
 
       if (!candidates.length) {
-        setValidationMessage("No solvable affinity from displayed peaks");
+        setValidationMessage("No solvable six-vertex affinity from displayed peaks");
         return null;
       }
 
-      const best = chooseBestAffinityCandidate(candidates, center);
+      const best = chooseBestAffinityCandidate(candidates);
       if (!best) {
-        setValidationMessage("No valid affinity candidate after geometric filtering");
+        setValidationMessage("Patch rejected: geometry invalid or phase assignment ambiguous");
         return null;
       }
-      best.seedReferencePatch = seedReferencePatch;
       best.allCandidates = candidates;
-      best.selectionMode = "order_preserving_assignment_then_geometry_expected_jacobian_then_phase_tiebreak";
+      best.selectionMode = "six_vertices_weighted_ls_then_hard_geometry_filters_then_phase_correlation";
       return best;
-    }
-
-    function homogeneous2(y) {
-      return [y[0], y[1], 1.0];
-    }
-
-    function embedHomography6(h) {
-      return [
-        [h[0], h[1], 0.0],
-        [h[2], h[3], 0.0],
-        [h[4], h[5], 1.0]
-      ];
     }
 
     function mat3Mul(A, B) {
@@ -3143,68 +2764,6 @@
       ];
     }
 
-    function normalizePoints(ys) {
-      let cx = 0.0, cy = 0.0;
-      for (const p of ys) { cx += p[0]; cy += p[1]; }
-      cx /= Math.max(1, ys.length); cy /= Math.max(1, ys.length);
-      let d = 0.0;
-      for (const p of ys) d += Math.hypot(p[0] - cx, p[1] - cy);
-      d /= Math.max(1, ys.length);
-      const s = d < 1e-12 ? 1.0 : Math.SQRT2 / d;
-      const T = [[s, 0.0, -s * cx], [0.0, s, -s * cy], [0.0, 0.0, 1.0]];
-      const Tinv = [[1/s, 0.0, cx], [0.0, 1/s, cy], [0.0, 0.0, 1.0]];
-      const ysN = ys.map((p) => applyHomographyPoint(T, p));
-      return { ysN, T, Tinv };
-    }
-
-    function denormalizeHomography(Hn, T) {
-      const Tinv = invert3x3(T);
-      if (!Tinv) return Hn;
-      let H = mat3Mul(mat3Mul(Tinv, Hn), T);
-      if (Math.abs(H[2][2]) > 1e-12) {
-        const s = H[2][2];
-        H = H.map((row) => row.map((v) => v / s));
-      }
-      return H;
-    }
-
-    function residualVectorHomography(h, As, ys) {
-      const H = embedHomography6(h);
-      const invH = invert3x3(H);
-      const detH = H[0][0]*(H[1][1]*H[2][2]-H[1][2]*H[2][1]) - H[0][1]*(H[1][0]*H[2][2]-H[1][2]*H[2][0]) + H[0][2]*(H[1][0]*H[2][1]-H[1][1]*H[2][0]);
-      if (!invH || !Number.isFinite(detH) || Math.abs(detH) < 1e-12) {
-        return new Float64Array(4 * As.length).fill(1e6);
-      }
-      const out = new Float64Array(4 * As.length);
-      let k = 0;
-      for (let idx = 0; idx < As.length; idx++) {
-        const Aobs = As[idx];
-        const yi = ys[idx];
-        try {
-          const J = jacobianHomographyAtInput(H, yi[0], yi[1]);
-          out[k++] = Aobs[0][0] - J[0][0];
-          out[k++] = Aobs[0][1] - J[0][1];
-          out[k++] = Aobs[1][0] - J[1][0];
-          out[k++] = Aobs[1][1] - J[1][1];
-        } catch (e) {
-          out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6; out[k++] = 1e6;
-        }
-      }
-      return out;
-    }
-
-    function vecNorm(v) {
-      let s = 0.0;
-      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
-      return Math.sqrt(s);
-    }
-
-    function meanSquared(v) {
-      let s = 0.0;
-      for (let i = 0; i < v.length; i++) s += v[i] * v[i];
-      return s / Math.max(1, v.length);
-    }
-
     function solveLinearSystem(A, b) {
       const n = A.length;
       const M = A.map((row, i) => row.slice().concat([b[i]]));
@@ -3226,66 +2785,6 @@
         }
       }
       return M.map((row) => row[n]);
-    }
-
-    function optimizeLeastSquaresHomographyJS(As, ys, maxIter = 120, usePointNormalization = false) {
-      let ysOpt = ys.slice();
-      let T = [[1,0,0],[0,1,0],[0,0,1]];
-      if (usePointNormalization) {
-        const norm = normalizePoints(ys);
-        ysOpt = norm.ysN;
-        T = norm.T;
-      }
-      let x = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-      let lambda = 1e-2;
-      let r = residualVectorHomography(x, As, ysOpt);
-      let cost = meanSquared(r);
-      for (let it = 0; it < maxIter; it++) {
-        const m = r.length;
-        const p = x.length;
-        const J = Array.from({ length: m }, () => new Array(p).fill(0.0));
-        for (let j = 0; j < p; j++) {
-          const eps = 1e-5 * Math.max(1.0, Math.abs(x[j]));
-          const xp = x.slice(); xp[j] += eps;
-          const xm = x.slice(); xm[j] -= eps;
-          const rp = residualVectorHomography(xp, As, ysOpt);
-          const rm = residualVectorHomography(xm, As, ysOpt);
-          for (let i = 0; i < m; i++) J[i][j] = (rp[i] - rm[i]) / (2 * eps);
-        }
-        const JTJ = Array.from({ length: p }, () => new Array(p).fill(0.0));
-        const JTr = new Array(p).fill(0.0);
-        for (let i = 0; i < m; i++) {
-          for (let a = 0; a < p; a++) {
-            JTr[a] += J[i][a] * r[i];
-            for (let b = 0; b < p; b++) JTJ[a][b] += J[i][a] * J[i][b];
-          }
-        }
-        for (let a = 0; a < p; a++) JTJ[a][a] += lambda;
-        const rhs = JTr.map((v) => -v);
-        const delta = solveLinearSystem(JTJ, rhs);
-        if (!delta) break;
-        const xTrial = x.map((v, i) => v + delta[i]);
-        const rTrial = residualVectorHomography(xTrial, As, ysOpt);
-        const costTrial = meanSquared(rTrial);
-        if (costTrial < cost) {
-          x = xTrial;
-          r = rTrial;
-          cost = costTrial;
-          lambda *= 0.6;
-          if (vecNorm(delta) < 1e-8) break;
-        } else {
-          lambda *= 2.5;
-        }
-      }
-      const Hn = embedHomography6(x);
-      const H = usePointNormalization ? denormalizeHomography(Hn, T) : Hn;
-      const residualsFinal = residualVectorHomography([H[0][0], H[0][1], H[1][0], H[1][1], H[2][0], H[2][1]], As, ys);
-      return {
-        H_3x3: H,
-        H_3x2: [[H[0][0], H[0][1]], [H[1][0], H[1][1]], [H[2][0], H[2][1]]],
-        cost: meanSquared(residualsFinal),
-        info: { success: true, iterations: maxIter, raw_result_x: x.slice() }
-      };
     }
 
     function renderRectifiedWithHomography(H) {
@@ -3323,93 +2822,37 @@
       return out;
     }
 
-    function translationHomography(tx, ty) {
-      return [
-        [1.0, 0.0, tx],
-        [0.0, 1.0, ty],
-        [0.0, 0.0, 1.0]
-      ];
-    }
-
-    function averageValidatedCenter() {
-      let sx = 0.0;
-      let sy = 0.0;
-      const n = state.validatedAffinities.length;
-      for (const item of state.validatedAffinities) {
-        sx += item.center.x;
-        sy += item.center.y;
-      }
-      return [sx / Math.max(1, n), sy / Math.max(1, n)];
-    }
-
-    function averageValidatedReferenceCenter() {
-      let sx = 0.0;
-      let sy = 0.0;
-      let n = 0;
-      for (const item of state.validatedAffinities) {
-        if (!item || !item.referenceCenter || !isFinitePoint(item.referenceCenter)) continue;
-        sx += item.referenceCenter.x;
-        sy += item.referenceCenter.y;
-        n++;
-      }
-      if (!n) return null;
-      return [sx / n, sy / n];
-    }
-
-    function anchorHomographyAtSourcePoint(H, anchorDef, anchorRef) {
-      // The Jacobian-only optimization estimates the local derivatives of the
-      // rectifying map H: deformed -> reference, but it does not determine the
-      // absolute translation robustly. We therefore impose one photometric
-      // anchor consistent with the known projection used in the demo:
-      //
-      //     H(anchorDef) = anchorRef
-      //
-      // where anchorDef is the average validated center in the deformed image,
-      // and anchorRef is its mapped position in the original texture.
-      const q = applyHomographyPoint(H, anchorDef);
-      const tx = anchorRef[0] - q[0];
-      const ty = anchorRef[1] - q[1];
-      const T = translationHomography(tx, ty);
-
-      let Hanchored = mat3Mul(T, H);
-      if (Math.abs(Hanchored[2][2]) > 1e-12) {
-        const s = Hanchored[2][2];
-        Hanchored = Hanchored.map((row) => row.map((v) => v / s));
-      }
-      return Hanchored;
-    }
-
     function recomputeRectification() {
       state.rectificationTransform = null;
       state.globalHomography = null;
       state.globalHomographyInfo = null;
       state.rectificationImageData = null;
       state.differenceImageData = null;
-      if (state.validatedAffinities.length < 3) {
+      if (state.validatedAffinities.length < 4) {
         state.rectificationEnabled = false;
         state.differenceEnabled = false;
         refreshRectificationUI();
         return;
       }
-      const As = state.validatedAffinities.map((item) => item.Arect);
-      const ys = state.validatedAffinities.map((item) => [item.center.x, item.center.y]);
-
-      // Do not normalize points here unless the local Jacobian targets are also
-      // transformed consistently. Keeping pixel coordinates matches the Python
-      // rectification-homography fit from local Arect matrices.
-      const opt = optimizeLeastSquaresHomographyJS(As, ys, 120, false);
-
-      const anchorDef = averageValidatedCenter();
-      const anchorRefFromMatches = averageValidatedReferenceCenter();
-      const anchorRefMapped = state.testMode === "real" ? null : mapDisplayToSource(anchorDef[0], anchorDef[1]);
-      const anchorRef = anchorRefFromMatches
-        || (anchorRefMapped ? [anchorRefMapped.x, anchorRefMapped.y] : anchorDef);
-      const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
-
+      const usable = state.validatedAffinities.filter((item) => item && item.Arect && item.center && item.referenceCenter);
+      if (usable.length < 4) {
+        state.rectificationEnabled = false;
+        state.differenceEnabled = false;
+        refreshRectificationUI();
+        return;
+      }
+      const opt = optimizeJointHomographyFromValidatedJS(usable);
+      if (!opt || !opt.H_3x3) {
+        state.rectificationEnabled = false;
+        state.differenceEnabled = false;
+        setValidationMessage("Global homography optimization failed");
+        refreshRectificationUI();
+        return;
+      }
       state.rectificationTransform = opt;
-      state.globalHomography = Hanchored;
+      state.globalHomography = opt.H_3x3; // G: deformed -> reference, 8 DOF, g33=1.
       state.globalHomographyInfo = opt.info;
-      state.rectificationImageData = renderRectifiedWithHomography(Hanchored);
+      state.rectificationImageData = renderRectifiedWithHomography(state.globalHomography);
       state.differenceImageData = (state.rectificationImageData && state.sourceImageData)
         ? makeDifferenceImage(state.sourceImageData, state.rectificationImageData)
         : null;
@@ -3433,10 +2876,10 @@
         return;
       }
       state.validatedAffinities.push(estimate);
-      const dExp = Number.isFinite(estimate.distanceToExpected) ? estimate.distanceToExpected.toFixed(3) : "?";
       const detMsg = Number.isFinite(estimate.det) ? estimate.det.toFixed(3) : "?";
       const shiftMsg = estimate.orderShift === undefined ? "?" : String(estimate.orderShift);
-      setValidationMessage(`OK - ${estimate.pairName} | order shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | dJ=${dExp} | det=${detMsg}`);
+      const ratioMsg = Number.isFinite(estimate.phaseRatioToSecond) ? estimate.phaseRatioToSecond.toFixed(2) : "?";
+      setValidationMessage(`OK - cyclic shift=${shiftMsg} | phase=${estimate.phaseScore.toFixed(4)} | ratio=${ratioMsg} | det=${detMsg}`);
       recomputeRectification();
       if (state.triangulationEnabled) {
         state.triangulationData = buildTriangulationFromValidatedAffinities();
@@ -3478,116 +2921,6 @@
       return [[d / det, -b / det], [-c / det, a / det]];
     }
 
-    function mapDisplayToSource(x, y) {
-      if (state.testMode === "real") return null;
-      const mode = state.projectionModes[state.projectionIndex];
-      if (mode === "Affine") return mapDisplayToSourceAffine(x, y);
-      if (mode === "Perspective") return mapDisplayToSourcePerspective(x, y);
-      if (mode === "Cylindrical") return mapDisplayToSourceCylindrical(x, y);
-      if (mode === "Two Planes") return mapDisplayToSourceTwoPlanes(x, y);
-      return { x, y };
-    }
-
-    function mapDisplayToSourceAffine(x, y) {
-      const w = state.size;
-      const h = state.size;
-      const cx = w / 2;
-      const cy = h / 2;
-      const zRot = degToRad(state.affine.rotationDeg);
-      const A = [[state.affine.scaleX, state.affine.shearX], [state.affine.shearY, state.affine.scaleY]];
-      const R = [[Math.cos(zRot), -Math.sin(zRot)], [Math.sin(zRot), Math.cos(zRot)]];
-      const M = [
-        [R[0][0] * A[0][0] + R[0][1] * A[1][0], R[0][0] * A[0][1] + R[0][1] * A[1][1]],
-        [R[1][0] * A[0][0] + R[1][1] * A[1][0], R[1][0] * A[0][1] + R[1][1] * A[1][1]]
-      ];
-      const Minv = mat2Inv(M);
-      if (!Minv) return null;
-      const srcLocal = mat2MulVec(Minv, [x - cx, y - cy]);
-      return { x: srcLocal[0] + cx, y: srcLocal[1] + cy };
-    }
-
-    function mapDisplayToSourcePerspective(x, y) {
-      const hom = buildPerspectiveHomography(state.size, state.size);
-      if (!hom || !hom.Hinv) return null;
-      const p = applyHomographyPoint(hom.Hinv, [x, y]);
-      return { x: p[0], y: p[1] };
-    }
-
-    function mapDisplayToSourceCylindrical(x, y) {
-      const w = state.size;
-      const h = state.size;
-      const zRot = degToRad(state.cylindrical.zRotationDeg);
-      const radius = 1.0;
-      const thetaHalf = clamp(state.cylindrical.curvature * 0.55, 0.15, 1.25);
-      const halfHeight = Math.max(0.15, state.cylindrical.verticalStretch) * radius * 0.85;
-      const cameraDistance = radius * (1.4 + 2.8 * (1.0 - clamp(state.cylindrical.perspectiveDrop, 0, 2)));
-      const cameraPos = [radius + cameraDistance, 0.0, 0.0];
-      const viewDir = subVec3([0.0, 0.0, 0.0], cameraPos);
-      const focalPx = 0.95 * Math.max(w, h);
-      const { right, up, fwd } = buildCameraBasisJS(viewDir, [0, 0, 1], zRot);
-      const cx = (w - 1) / 2;
-      const cy = (h - 1) / 2;
-      const xCam = x - cx;
-      const yCam = -(y - cy);
-      let D = addVec3(addVec3(scaleVec3(right, xCam), scaleVec3(up, yCam)), scaleVec3(fwd, focalPx));
-      D = normalizeVec3(D);
-      const Cx = cameraPos[0], Cy = cameraPos[1], Cz = cameraPos[2];
-      const Dx = D[0], Dy = D[1], Dz = D[2];
-      const a = Dx * Dx + Dy * Dy;
-      const b = 2.0 * (Cx * Dx + Cy * Dy);
-      const c = Cx * Cx + Cy * Cy - radius * radius;
-      if (a <= 1e-12) return null;
-      const disc = b * b - 4.0 * a * c;
-      if (disc <= 0.0) return null;
-      const sqrtDisc = Math.sqrt(disc);
-      const t1 = (-b - sqrtDisc) / (2.0 * a);
-      const t2 = (-b + sqrtDisc) / (2.0 * a);
-      let t = Infinity;
-      if (t1 > 1e-6 && t2 > 1e-6) t = Math.min(t1, t2);
-      else if (t1 > 1e-6) t = t1;
-      else if (t2 > 1e-6) t = t2;
-      if (!Number.isFinite(t)) return null;
-      const Px = Cx + t * Dx;
-      const Py = Cy + t * Dy;
-      const Pz = Cz + t * Dz;
-      const theta = Math.atan2(Py, Px);
-      const insideAngular = theta >= -thetaHalf && theta <= thetaHalf;
-      const insideVertical = Pz >= -halfHeight && Pz <= halfHeight;
-      const Nx = Math.cos(theta);
-      const Ny = Math.sin(theta);
-      const facing = ((Cx - Px) * Nx + (Cy - Py) * Ny) > 0.0;
-      if (!insideAngular || !insideVertical || !facing) return null;
-      const uNorm = (theta + thetaHalf) / (2.0 * thetaHalf);
-      const vNorm = (halfHeight - Pz) / (2.0 * halfHeight);
-      return { x: clamp(uNorm * (w - 1), 0, w - 1), y: clamp(vNorm * (h - 1), 0, h - 1) };
-    }
-
-
-    function mapDisplayToSourceTwoPlanes(x, y) {
-      const hit = rayToTwoPlanesSource(x, y, state.size, state.size);
-      if (!hit) return null;
-      return { x: hit.x, y: hit.y };
-    }
-
-    function numericalJacobianDisplayToSource(x, y) {
-      const eps = 1.0;
-      const px1 = mapDisplayToSource(x + eps, y);
-      const px0 = mapDisplayToSource(x - eps, y);
-      const py1 = mapDisplayToSource(x, y + eps);
-      const py0 = mapDisplayToSource(x, y - eps);
-      if (!px1 || !px0 || !py1 || !py0) return null;
-      return [
-        [(px1.x - px0.x) / (2 * eps), (py1.x - py0.x) / (2 * eps)],
-        [(px1.y - px0.y) / (2 * eps), (py1.y - py0.y) / (2 * eps)]
-      ];
-    }
-
-    function sourceToDisplayJacobianAt(x, y) {
-      if (state.testMode === "real") return null;
-      const JdisplayToSource = numericalJacobianDisplayToSource(x, y);
-      if (!JdisplayToSource) return null;
-      return mat2Inv(JdisplayToSource);
-    }
 
     function getTextureShiftVectorsSourcePx() {
       if (state.testMode === "real") {
@@ -3600,36 +2933,6 @@
         };
       }
       return syntheticShiftVectorsFromCurrentTexture();
-    }
-
-    function getTheoreticalPeakInfo(acW, acH, displayX, displayY) {
-      if (state.testMode === "real") {
-        // No synthetic projection is known in real mode. We therefore avoid
-        // orienting the detected hexagon with synthetic theoretical peaks.
-        return { peaks: [], U_ref_rc: null, V_ref_rc: null };
-      }
-      const J = sourceToDisplayJacobianAt(displayX, displayY);
-      if (!J) return { peaks: [], U_ref_rc: null, V_ref_rc: null };
-      const { U, V } = getTextureShiftVectorsSourcePx();
-      const JU = mat2MulVec(J, U);
-      const JV = mat2MulVec(J, V);
-      const JW = mat2MulVec(J, [U[0] - V[0], U[1] - V[1]]);
-      const cx = (acW - 1) / 2.0;
-      const cy = (acH - 1) / 2.0;
-      const peaks = [
-        { name: "+JU", vec: JU, color: "#ff3030" },
-        { name: "-JU", vec: [-JU[0], -JU[1]], color: "#ff3030" },
-        { name: "+JV", vec: JV, color: "#00ff60" },
-        { name: "-JV", vec: [-JV[0], -JV[1]], color: "#00ff60" },
-        { name: "+J(U-V)", vec: JW, color: "#fff000" },
-        { name: "-J(U-V)", vec: [-JW[0], -JW[1]], color: "#fff000" }
-      ].map((p) => ({ name: p.name, x: cx + p.vec[0], y: cy + p.vec[1], color: p.color }));
-      return {
-        peaks,
-        // références en convention [row, col] centrée, comme dans find_hexagon
-        U_ref_rc: [JU[1], JU[0]],
-        V_ref_rc: [JV[1], JV[0]]
-      };
     }
 
     // =========================================================
@@ -3652,34 +2955,6 @@
       for (let i = 0; i < out.length; i++) mean += out[i];
       mean /= Math.max(out.length, 1);
       for (let i = 0; i < out.length; i++) out[i] -= mean;
-      return out;
-    }
-
-    function computeAutocorrelation2D(grayPatch, n) {
-      const out = new Float64Array(n * n);
-      const center = Math.floor(n / 2);
-      for (let dy = -center; dy <= center; dy++) {
-        for (let dx = -center; dx <= center; dx++) {
-          let sum = 0.0;
-          let energyA = 0.0;
-          let energyB = 0.0;
-          for (let y = 0; y < n; y++) {
-            const yy = y + dy;
-            if (yy < 0 || yy >= n) continue;
-            for (let x = 0; x < n; x++) {
-              const xx = x + dx;
-              if (xx < 0 || xx >= n) continue;
-              const a = grayPatch[y * n + x];
-              const b = grayPatch[yy * n + xx];
-              sum += a * b;
-              energyA += a * a;
-              energyB += b * b;
-            }
-          }
-          const denom = Math.sqrt(Math.max(energyA * energyB, 1e-12));
-          out[(dy + center) * n + (dx + center)] = sum / denom;
-        }
-      }
       return out;
     }
 
@@ -3734,174 +3009,6 @@
       return [dr, dc];
     }
 
-    function refinePeakSubpixel3x3(R, n, r, c) {
-      if (r <= 0 || r >= n - 1 || c <= 0 || c >= n - 1) return [r, c];
-      const center = R[r * n + c];
-      const up = R[(r - 1) * n + c];
-      const down = R[(r + 1) * n + c];
-      const left = R[r * n + (c - 1)];
-      const right = R[r * n + (c + 1)];
-      const denomR = up - 2 * center + down;
-      const denomC = left - 2 * center + right;
-      let offR = 0;
-      let offC = 0;
-      if (Math.abs(denomR) > 1e-12) offR = 0.5 * (up - down) / denomR;
-      if (Math.abs(denomC) > 1e-12) offC = 0.5 * (left - right) / denomC;
-      offR = clamp(offR, -1, 1);
-      offC = clamp(offC, -1, 1);
-      return [r + offR, c + offC];
-    }
-
-    function detectCandidatesSubpixelJS(R, n, kwargs) {
-      const k = Math.max(2, Math.floor(kwargs.k ?? 80));
-      const nmsSize = Math.max(3, Math.floor(kwargs.nmsSize ?? 9));
-      const rad = Math.floor(nmsSize / 2);
-      const excludeCenterRadius = Number(kwargs.excludeCenterRadius ?? 7.0);
-      const minSeparation = Number(kwargs.minSeparation ?? 3.0);
-      const refineSubpixel = kwargs.refineSubpixel !== false;
-      const center = [n / 2.0, n / 2.0];
-      const cy = center[0];
-      const cx = center[1];
-      const candidates = [];
-
-      for (let r = 0; r < n; r++) {
-        for (let c = 0; c < n; c++) {
-          const distCenter = Math.hypot(r - cy, c - cx);
-          if (distCenter < excludeCenterRadius) continue;
-          const val = R[r * n + c];
-          let localMax = true;
-          let localMin = Infinity;
-          for (let dr = -rad; dr <= rad; dr++) {
-            for (let dc = -rad; dc <= rad; dc++) {
-              const rr = (r + dr + n) % n;
-              const cc = (c + dc + n) % n;
-              const vv = R[rr * n + cc];
-              if (vv > val) localMax = false;
-              if (vv < localMin) localMin = vv;
-            }
-          }
-          if (!localMax) continue;
-          candidates.push({ r, c, prom: val - localMin, value: val });
-        }
-      }
-
-      candidates.sort((a, b) => b.prom - a.prom);
-      const kept = [];
-      for (const cand of candidates) {
-        if (cand.prom <= 0) continue;
-        const p = [cand.r, cand.c];
-        if (kept.every((q) => torusDistance(p, q, n) >= minSeparation)) {
-          const refined = refineSubpixel ? refinePeakSubpixel3x3(R, n, cand.r, cand.c) : [cand.r, cand.c];
-          kept.push(refined);
-        }
-        if (kept.length >= k) break;
-      }
-      return kept;
-    }
-
-    function energyUVSimpleJS(R, n, uPos, vPos, kwargs) {
-      const center = [n / 2.0, n / 2.0];
-      const uOff = toCenteredOffset(uPos, n, center);
-      const vOff = toCenteredOffset(vPos, n, center);
-      const wOff = [uOff[0] - vOff[0], uOff[1] - vOff[1]];
-      const wPos = [center[0] + wOff[0], center[1] + wOff[1]];
-      const E = 2.0 * (
-        sampleArrayBilinearWrap(R, n, uPos[0], uPos[1]) +
-        sampleArrayBilinearWrap(R, n, vPos[0], vPos[1]) +
-        sampleArrayBilinearWrap(R, n, wPos[0], wPos[1])
-      );
-      return { E, wPos, wOff };
-    }
-
-    function bestPairMaxEnergyJS(R, n, positions, kwargs) {
-      if (!positions || positions.length < 2) return null;
-      const center = [n / 2.0, n / 2.0];
-      const minDist = Number(kwargs.minDist ?? 3.0);
-      const antipodalTol = Number(kwargs.antipodalTol ?? 2.0);
-      const angleMinDeg = Number(kwargs.angleMinDeg ?? 12.0);
-      const wExcludeCenterRadius = Number(kwargs.wExcludeCenterRadius ?? kwargs.excludeCenterRadius ?? 7.0);
-      const sinMin = Math.sin(degToRad(angleMinDeg));
-      let best = null;
-      let bestE = -Infinity;
-
-      for (let i = 0; i < positions.length - 1; i++) {
-        const ui = positions[i];
-        for (let j = i + 1; j < positions.length; j++) {
-          const vj = positions[j];
-          if (torusDistance(ui, vj, n) < minDist) continue;
-          const uOff = toCenteredOffset(ui, n, center);
-          const vOff = toCenteredOffset(vj, n, center);
-          if (Math.hypot(uOff[0] + vOff[0], uOff[1] + vOff[1]) < antipodalTol) continue;
-          const nu = Math.hypot(uOff[0], uOff[1]);
-          const nv = Math.hypot(vOff[0], vOff[1]);
-          if (nu < 1e-9 || nv < 1e-9) continue;
-          const sinang = Math.abs(uOff[0] * vOff[1] - uOff[1] * vOff[0]) / (nu * nv);
-          if (sinang < sinMin) continue;
-          const e = energyUVSimpleJS(R, n, ui, vj, kwargs);
-          const wDist = Math.hypot(e.wOff[0], e.wOff[1]);
-          if (wExcludeCenterRadius > 0 && wDist < wExcludeCenterRadius) continue;
-          if (e.E > bestE) {
-            bestE = e.E;
-            best = { uPos: ui, vPos: vj, wPos: e.wPos, E: e.E };
-          }
-        }
-      }
-      return best;
-    }
-
-    function cos2(a, b) {
-      const na = Math.hypot(a[0], a[1]);
-      const nb = Math.hypot(b[0], b[1]);
-      if (na < 1e-9 || nb < 1e-9) return 0;
-      return (a[0] * b[0] + a[1] * b[1]) / (na * nb);
-    }
-
-    function orientUVByRefs(uOff, vOff, wOff, U_ref_rc, V_ref_rc) {
-      if (!U_ref_rc || !V_ref_rc) return { u: uOff, v: vOff, w: wOff };
-      const cands = [
-        { u: uOff, v: vOff },
-        { u: [-uOff[0], -uOff[1]], v: vOff },
-        { u: uOff, v: [-vOff[0], -vOff[1]] },
-        { u: [-uOff[0], -uOff[1]], v: [-vOff[0], -vOff[1]] }
-      ];
-      let best = cands[0];
-      let bestScore = -Infinity;
-      for (const cand of cands) {
-        const score = cos2(cand.u, U_ref_rc) + cos2(cand.v, V_ref_rc);
-        if (score > bestScore) { bestScore = score; best = cand; }
-      }
-      const Wref = [U_ref_rc[0] - V_ref_rc[0], U_ref_rc[1] - V_ref_rc[1]];
-      const wSame = cos2(wOff, Wref) >= 0 ? wOff : [-wOff[0], -wOff[1]];
-      return { u: best.u, v: best.v, w: wSame };
-    }
-
-    function findHexagonJS(R, n, kwargs, U_ref_rc = null, V_ref_rc = null) {
-      const refined = detectCandidatesSubpixelJS(R, n, kwargs);
-      if (refined.length < 2) return null;
-      const best = bestPairMaxEnergyJS(R, n, refined, kwargs);
-      if (!best) return null;
-      const center = [n / 2.0, n / 2.0];
-      const uC = toCenteredOffset(best.uPos, n, center);
-      const vC = toCenteredOffset(best.vPos, n, center);
-      const wC = toCenteredOffset(best.wPos, n, center);
-      const oriented = orientUVByRefs(uC, vC, wC, U_ref_rc, V_ref_rc);
-      return {
-        u_fin: oriented.u,
-        v_fin: oriented.v,
-        w_fin: oriented.w,
-        energy_final: best.E,
-        refined_peaks: refined,
-        hex6_centered: [
-          oriented.u,
-          [-oriented.u[0], -oriented.u[1]],
-          oriented.v,
-          [-oriented.v[0], -oriented.v[1]],
-          oriented.w,
-          [-oriented.w[0], -oriented.w[1]]
-        ]
-      };
-    }
-
     function hexResultToPreviewPeaks(res, n) {
       if (!res) return [];
       const cx = (n - 1) / 2.0;
@@ -3916,78 +3023,6 @@
       ];
       // off is [dr, dc], canvas uses x=col, y=row
       return items.map((p) => ({ name: p.name, x: cx + p.off[1], y: cy + p.off[0], color: p.color }));
-    }
-
-    function runStableHexagonJS(fullPatch, patchSize, targetSize, displayX, displayY, theoreticalInfo) {
-      const kwargs = state.peakDetection;
-      const minPs = Math.max(16, Math.floor(kwargs.minPs ?? 40));
-      const maxPs = Math.min(Math.floor(kwargs.maxPs ?? patchSize), patchSize);
-      const step = Math.max(1, Math.floor(kwargs.step ?? 4));
-      const stableSeqLen = Math.max(2, Math.floor(kwargs.stableSeqLen ?? 3));
-      const stableTol = Number(kwargs.stableTol ?? 1.0);
-      let lastPts6 = null;
-      let runLen = 0;
-      const stable = [];
-      let best = null;
-      let bestD = Infinity;
-
-      function buildSubPatchFromFull(ps) {
-        const n = targetSize;
-        const out = new Float64Array(n * n);
-        const scale = ps / patchSize;
-        const halfN = n / 2;
-        let idx = 0;
-        for (let r = 0; r < n; r++) {
-          for (let c = 0; c < n; c++) {
-            const srcR = halfN + (r - halfN) * scale;
-            const srcC = halfN + (c - halfN) * scale;
-            out[idx++] = samplePatchBilinear(fullPatch, n, srcR, srcC);
-          }
-        }
-        let mean = 0;
-        for (let i = 0; i < out.length; i++) mean += out[i];
-        mean /= Math.max(out.length, 1);
-        for (let i = 0; i < out.length; i++) out[i] -= mean;
-        return out;
-      }
-
-      for (let ps = minPs; ps <= maxPs; ps += step) {
-        const patch = buildSubPatchFromFull(ps);
-        const ac = computeAutocorrelation2D(patch, targetSize);
-        const res = findHexagonJS(ac, targetSize, kwargs, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
-        if (!res) {
-          lastPts6 = null;
-          runLen = 0;
-          stable.length = 0;
-          continue;
-        }
-        const pts6 = res.hex6_centered.map((o) => [o[1], o[0]]); // [dc, dr]
-        if (lastPts6) {
-          let dmax = 0;
-          for (let i = 0; i < 6; i++) {
-            dmax = Math.max(dmax, Math.hypot(pts6[i][0] - lastPts6[i][0], pts6[i][1] - lastPts6[i][1]));
-          }
-          if (dmax < bestD) {
-            bestD = dmax;
-            best = res;
-          }
-          if (dmax <= stableTol) {
-            runLen += 1;
-            stable.push(res);
-            if (runLen >= stableSeqLen) return res;
-          } else {
-            runLen = 1;
-            stable.length = 0;
-            stable.push(res);
-          }
-        } else {
-          runLen = 1;
-          stable.length = 0;
-          stable.push(res);
-        }
-        lastPts6 = pts6;
-      }
-      return best;
     }
 
     function samplePatchBilinear(patch, n, r, c) {
@@ -4051,7 +3086,7 @@
       if (!state.autocorrEnabled || !state.displayedImageData || !acorrCanvas || !acorrCtx) return;
 
       const patchSize = state.patchSize;
-      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const computeSize = patchSize;
       const cx = x;
       const cy = y;
 
@@ -4074,13 +3109,7 @@
       drawCross(acorrCtx, acorrCanvas.width / 2, acorrCanvas.height / 2, "#00ffff", 5, 1);
 
       if (state.peaksEnabled) {
-        const theoreticalInfo = getTheoreticalPeakInfo(computeSize, computeSize, cx, cy);
-        let detection = null;
-        if (state.peakDetection.useStablePatch) {
-          detection = runStableHexagonJS(patch, patchSize, computeSize, cx, cy, theoreticalInfo);
-        } else {
-          detection = findHexagonJS(ac, computeSize, state.peakDetection, theoreticalInfo.U_ref_rc, theoreticalInfo.V_ref_rc);
-        }
+        const detection = findHexagonJS(ac, computeSize, state.peakDetection);
         state.lastDetection = detection;
         state.lastAffinityEstimate = estimateCurrentAffinityFromDetection();
         refreshRectificationUI();
@@ -4262,53 +3291,6 @@
       return parts.join('__');
     }
 
-    function normalizeHomography3x3(H) {
-      if (!H) return null;
-      const h33 = Number(H[2] && H[2][2]);
-      if (Number.isFinite(h33) && Math.abs(h33) > 1e-12) {
-        return H.map((row) => row.map((v) => v / h33));
-      }
-      let norm = 0.0;
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 3; c++) norm += Number(H[r][c]) * Number(H[r][c]);
-      }
-      norm = Math.sqrt(norm);
-      if (!Number.isFinite(norm) || norm < 1e-12) return H;
-      return H.map((row) => row.map((v) => v / norm));
-    }
-
-    function frobeniusErrorHomographyWithoutTranslationColumn(A, B) {
-      // Homographies are first normalized by H[2][2].
-      // Then we compare only the first two columns:
-      //
-      //   [ h11 h12 | h13 ]
-      //   [ h21 h22 | h23 ]
-      //   [ h31 h32 | h33 ]
-      //
-      // The translation column [h13, h23, h33]^T is ignored.
-      // The compared block is therefore:
-      //
-      //   [ h11 h12 ]
-      //   [ h21 h22 ]
-      //   [ h31 h32 ]
-      //
-      if (!A || !B) return null;
-      const A1 = normalizeHomography3x3(A);
-      const B1 = normalizeHomography3x3(B);
-
-      let s = 0.0;
-      for (let r = 0; r < 3; r++) {
-        for (let c = 0; c < 2; c++) {
-          const a = Number(A1[r][c]);
-          const b = Number(B1[r][c]);
-          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-          const d = a - b;
-          s += d * d;
-        }
-      }
-      return Math.sqrt(s);
-    }
-
     function computeMeanGray(imageData) {
       if (!imageData || !imageData.data || !imageData.data.length) return 255;
       let s = 0.0;
@@ -4317,51 +3299,66 @@
       return s / Math.max(1, n);
     }
 
-    function computeGeometricDeformationError200x200(Htrue, Hestimated) {
-      if (!Htrue || !Hestimated) return null;
+    function mat2DifferenceFroJS(A, B) {
+      if (!A || !B) return null;
+      return Math.sqrt(
+        (A[0][0]-B[0][0])**2 + (A[0][1]-B[0][1])**2 +
+        (A[1][0]-B[1][0])**2 + (A[1][1]-B[1][1])**2
+      );
+    }
 
+    // Evaluation-only geometric metrics. These functions never feed the estimator.
+    function computeHomographyTransferMetrics200x200(Htrue, Hestimated) {
+      if (!Htrue || !Hestimated) return null;
+      const Gtrue = invert3x3(Htrue);
+      const Gest = invert3x3(Hestimated);
+      if (!Gtrue || !Gest) return null;
       const crop = Math.min(200, state.size, state.size);
       const x0 = Math.floor((state.size - crop) / 2);
       const y0 = Math.floor((state.size - crop) / 2);
-
-      let n = 0;
-      let sum = 0.0;
-      let sumSq = 0.0;
-      let maxErr = 0.0;
-
-      for (let y = y0; y < y0 + crop; y++) {
-        for (let x = x0; x < x0 + crop; x++) {
-          const pTrue = applyHomographyPoint(Htrue, [x, y]);
-          const pEst = applyHomographyPoint(Hestimated, [x, y]);
-
-          if (!pTrue || !pEst) continue;
-          const dx = pEst[0] - pTrue[0];
-          const dy = pEst[1] - pTrue[1];
-          if (!Number.isFinite(dx) || !Number.isFinite(dy)) continue;
-
-          const e = Math.sqrt(dx * dx + dy * dy);
-          sum += e;
-          sumSq += e * e;
-          maxErr = Math.max(maxErr, e);
-          n++;
-        }
+      let n=0, sf=0, sf2=0, mf=0, sb=0, sb2=0, mb=0, ss=0, ss2=0, ms=0;
+      for (let y=y0; y<y0+crop; y++) for (let x=x0; x<x0+crop; x++) {
+        const yt=applyHomographyPoint(Htrue,[x,y]);
+        const ye=applyHomographyPoint(Hestimated,[x,y]);
+        if (!yt || !ye) continue;
+        const ef=Math.hypot(ye[0]-yt[0],ye[1]-yt[1]);
+        const xb=applyHomographyPoint(Gest,yt);
+        if (!xb) continue;
+        const eb=Math.hypot(xb[0]-x,xb[1]-y);
+        const es=Math.sqrt(ef*ef+eb*eb);
+        if (![ef,eb,es].every(Number.isFinite)) continue;
+        sf+=ef;sf2+=ef*ef;mf=Math.max(mf,ef);
+        sb+=eb;sb2+=eb*eb;mb=Math.max(mb,eb);
+        ss+=es;ss2+=es*es;ms=Math.max(ms,es);n++;
       }
-
       return {
-        crop_size_px: crop,
-        crop_origin_xy_in_source_image: { x: x0, y: y0 },
-        compared_pixels: n,
-        mean_transfer_error_px: roundNumberForExport(sum / Math.max(1, n)),
-        rmse_transfer_error_px: roundNumberForExport(Math.sqrt(sumSq / Math.max(1, n))),
-        max_transfer_error_px: roundNumberForExport(maxErr),
-        convention: "central 200x200 source pixels are projected by H_true and H_estimated; error is Euclidean distance in the deformed image, in pixels"
+        crop_size_px:crop, compared_pixels:n,
+        forward_mean_px:sf/Math.max(1,n), forward_rmse_px:Math.sqrt(sf2/Math.max(1,n)), forward_max_px:mf,
+        backward_mean_px:sb/Math.max(1,n), backward_rmse_px:Math.sqrt(sb2/Math.max(1,n)), backward_max_px:mb,
+        symmetric_mean_px:ss/Math.max(1,n), symmetric_rmse_px:Math.sqrt(ss2/Math.max(1,n)), symmetric_max_px:ms
       };
     }
 
-    function computePixelRectificationError200x200() {
-      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
-      const Hestimated = computeEstimatedDeformationHomographySourceToDisplayed();
-      return computeGeometricDeformationError200x200(Htrue, Hestimated);
+    function computeCornerTransferMetricsJS(Htrue,Hestimated) {
+      if (!Htrue || !Hestimated) return null;
+      const pts=[[0,0],[state.size-1,0],[state.size-1,state.size-1],[0,state.size-1]];
+      const errors=pts.map(p=>{
+        const a=applyHomographyPoint(Htrue,p),b=applyHomographyPoint(Hestimated,p);
+        return Math.hypot(a[0]-b[0],a[1]-b[1]);
+      });
+      return {errors_px:errors,mean_px:meanFiniteJS(errors),max_px:Math.max(...errors)};
+    }
+
+    function computePhotometricRectificationMetrics200x200JS() {
+      if (!state.sourceImageData || !state.rectificationImageData) return null;
+      const crop=Math.min(200,state.size,state.size),x0=Math.floor((state.size-crop)/2),y0=Math.floor((state.size-crop)/2);
+      let n=0,s=0,s2=0,m=0;
+      for(let y=y0;y<y0+crop;y++)for(let x=x0;x<x0+crop;x++){
+        const i=(y*state.size+x)*4;
+        const d=Math.abs(Number(state.sourceImageData.data[i])-Number(state.rectificationImageData.data[i]));
+        if(!Number.isFinite(d))continue;s+=d;s2+=d*d;m=Math.max(m,d);n++;
+      }
+      return {crop_size_px:crop,compared_pixels:n,mae_gray:s/Math.max(1,n),rmse_gray:Math.sqrt(s2/Math.max(1,n)),max_abs_gray:m};
     }
 
     function computeTrueDeformationHomographySourceToDisplayed() {
@@ -4396,23 +3393,10 @@
       return state.globalHomography ? invert3x3(state.globalHomography) : null;
     }
 
-    function computeGlobalHomographyComparison() {
-      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
-      const Hrect = state.globalHomography || null;
-      const Hest = computeEstimatedDeformationHomographySourceToDisplayed();
-      return {
-        true_deformation_homography_source_to_deformed: exportMat3(Htrue),
-        estimated_rectifying_homography_deformed_to_source: exportMat3(Hrect),
-        estimated_deformation_homography_source_to_deformed: exportMat3(Hest),
-        frobenius_error_without_translation_column_true_vs_estimated_deformation_homography: roundNumberForExport(frobeniusErrorHomographyWithoutTranslationColumn(Htrue, Hest)),
-        note: Htrue && Hest ? 'Frobenius norm computed after normalization by H[2][2], using only the first two columns of each homography; the translation column is ignored.' : 'Global homography comparison available only when both true and estimated homographies exist.'
-      };
-    }
-
     function makePeakPositionExport(item) {
       const detection = item && item.detection ? item.detection : null;
       const patchSize = Number(item && item.patchSize ? item.patchSize : state.patchSize);
-      const computeSize = Math.min(state.previewComputeSize, patchSize);
+      const computeSize = patchSize;
       const scale = patchSize / computeSize;
       const cxCompute = (computeSize - 1) / 2.0;
       const cyCompute = (computeSize - 1) / 2.0;
@@ -4519,8 +3503,6 @@
           validated_affinities_count: state.validatedAffinities.length,
           rectification_enabled: Boolean(state.rectificationEnabled),
           has_rectification_image: Boolean(state.rectificationImageData),
-          geometric_deformation_error_200x200_px: computePixelRectificationError200x200(),
-          global_homography_comparison: computeGlobalHomographyComparison(),
           rectification_solver_info: state.globalHomographyInfo || null
         },
         validated_count: state.validatedAffinities.length,
@@ -4647,6 +3629,310 @@
       applyCurrentProjection();
     }
 
+
+    // =========================================================
+    // THESIS-CANONICAL OVERRIDES
+    // these_ismail.tex is the normative specification.
+    // =========================================================
+
+    function isPowerOfTwoInt(n) {
+      n = Math.floor(n);
+      return n > 0 && (n & (n - 1)) === 0;
+    }
+
+    const dftTrigCache = new Map();
+    function getDftTrigTable(n) {
+      if (dftTrigCache.has(n)) return dftTrigCache.get(n);
+      const cos = new Float64Array(n * n);
+      const sin = new Float64Array(n * n);
+      for (let k = 0; k < n; k++) {
+        for (let t = 0; t < n; t++) {
+          const a = 2 * Math.PI * k * t / n;
+          cos[k*n+t] = Math.cos(a);
+          sin[k*n+t] = Math.sin(a);
+        }
+      }
+      const tab = { cos, sin };
+      dftTrigCache.set(n, tab);
+      return tab;
+    }
+
+    function transform1DAny(re, im, inverse = false) {
+      const n = re.length;
+      if (isPowerOfTwoInt(n)) {
+        fft1d(re, im, inverse);
+        return;
+      }
+      const { cos, sin } = getDftTrigTable(n);
+      const or = new Float64Array(n), oi = new Float64Array(n);
+      const sign = inverse ? 1.0 : -1.0;
+      for (let k=0;k<n;k++) {
+        let sr=0, si=0;
+        const off=k*n;
+        for (let t=0;t<n;t++) {
+          const c=cos[off+t], ss=sign*sin[off+t];
+          sr += re[t]*c - im[t]*ss;
+          si += re[t]*ss + im[t]*c;
+        }
+        if (inverse) { sr/=n; si/=n; }
+        or[k]=sr; oi[k]=si;
+      }
+      re.set(or); im.set(oi);
+    }
+
+    function transform2DAny(re, im, n, inverse = false) {
+      const rr=new Float64Array(n), ri=new Float64Array(n);
+      for (let y=0;y<n;y++) {
+        const off=y*n;
+        for (let x=0;x<n;x++){rr[x]=re[off+x];ri[x]=im[off+x];}
+        transform1DAny(rr,ri,inverse);
+        for (let x=0;x<n;x++){re[off+x]=rr[x];im[off+x]=ri[x];}
+      }
+      const cr=new Float64Array(n), ci=new Float64Array(n);
+      for (let x=0;x<n;x++) {
+        for (let y=0;y<n;y++){const k=y*n+x;cr[y]=re[k];ci[y]=im[k];}
+        transform1DAny(cr,ci,inverse);
+        for (let y=0;y<n;y++){const k=y*n+x;re[k]=cr[y];im[k]=ci[y];}
+      }
+    }
+
+    // Eq. autocorrelation-fft-energie: zero mean + unit L2 energy + circular FFT autocorrelation + fftshift.
+    function computeAutocorrelation2D(grayPatch, n) {
+      const size=n*n, re=new Float64Array(size), im=new Float64Array(size);
+      let mean=0; for(let i=0;i<size;i++) mean+=Number(grayPatch[i])||0; mean/=Math.max(1,size);
+      let energy=0; for(let i=0;i<size;i++){const v=(Number(grayPatch[i])||0)-mean;re[i]=v;energy+=v*v;}
+      energy=Math.sqrt(energy);
+      if(energy>1e-12) for(let i=0;i<size;i++) re[i]/=energy;
+      transform2DAny(re,im,n,false);
+      for(let i=0;i<size;i++){re[i]=re[i]*re[i]+im[i]*im[i];im[i]=0;}
+      transform2DAny(re,im,n,true);
+      const out=new Float64Array(size); const sh=Math.floor(n/2);
+      for(let y=0;y<n;y++) for(let x=0;x<n;x++) {
+        const yy=(y+sh)%n, xx=(x+sh)%n; out[yy*n+xx]=re[y*n+x];
+      }
+      let m=0; for(let i=0;i<size;i++) m=Math.max(m,Math.abs(out[i]));
+      if(m>1e-12) for(let i=0;i<size;i++) out[i]/=m;
+      return out;
+    }
+
+    function gaussianSmoothPeriodicJS(R,n,sigma) {
+      sigma=Number(sigma)||0; if(sigma<=0)return Float64Array.from(R);
+      const rad=Math.max(1,Math.ceil(3*sigma)); const ker=new Float64Array(2*rad+1); let sk=0;
+      for(let i=-rad;i<=rad;i++){const v=Math.exp(-(i*i)/(2*sigma*sigma));ker[i+rad]=v;sk+=v;}
+      for(let i=0;i<ker.length;i++)ker[i]/=sk;
+      const tmp=new Float64Array(n*n),out=new Float64Array(n*n);
+      for(let r=0;r<n;r++)for(let c=0;c<n;c++){let s0=0;for(let d=-rad;d<=rad;d++){const cc=(c+d+n)%n;s0+=ker[d+rad]*R[r*n+cc];}tmp[r*n+c]=s0;}
+      for(let r=0;r<n;r++)for(let c=0;c<n;c++){let s0=0;for(let d=-rad;d<=rad;d++){const rr=(r+d+n)%n;s0+=ker[d+rad]*tmp[rr*n+c];}out[r*n+c]=s0;}
+      return out;
+    }
+
+    // Candidates remain integer by definition. The historical name is retained for call compatibility.
+    function detectCandidatesSubpixelJS(R,n,kwargs) {
+      const k=Math.max(2,Math.floor(kwargs.k??80));
+      let nmsSize=Math.max(3,Math.floor(kwargs.nmsSize??9)); if(nmsSize%2===0)nmsSize++;
+      const rad=Math.floor(nmsSize/2), c0=Math.floor(n/2);
+      const r0=Number(kwargs.excludeCenterRadius??7), minSep=Number(kwargs.minSeparation??3);
+      const alpha=Number(kwargs.relativePeakThreshold??0.05);
+      let satMax=-Infinity;
+      for(let r=0;r<n;r++)for(let c=0;c<n;c++)if((r-c0)*(r-c0)+(c-c0)*(c-c0)>=r0*r0) satMax=Math.max(satMax,R[r*n+c]);
+      const thr=alpha*satMax, raw=[];
+      for(let r=0;r<n;r++)for(let c=0;c<n;c++) {
+        if((r-c0)*(r-c0)+(c-c0)*(c-c0)<r0*r0)continue;
+        const val=R[r*n+c]; if(!Number.isFinite(val)||val<thr)continue;
+        let local=true;
+        for(let dr=-rad;dr<=rad&&local;dr++)for(let dc=-rad;dc<=rad;dc++){
+          const rr=(r+dr+n)%n,cc=(c+dc+n)%n;if(R[rr*n+cc]>val){local=false;break;}
+        }
+        if(local)raw.push({r,c,value:val});
+      }
+      raw.sort((a,b)=>b.value-a.value);
+      const kept=[];
+      for(const q of raw){const p=[q.r,q.c];if(kept.every(x=>torusDistance(p,x,n)>=minSep))kept.push(p);if(kept.length>=k)break;}
+      return kept;
+    }
+
+    function fitQuadraticLocalJS(R,n,pos,radius=2) {
+      radius=Math.max(1,Math.floor(radius)); const m=6;
+      const ATA=Array.from({length:m},()=>new Array(m).fill(0)), ATz=new Array(m).fill(0);
+      let vals=[], rows=[], weights=[]; const sig=Math.max(0.75,radius/1.5);
+      for(let dr=-radius;dr<=radius;dr++)for(let dc=-radius;dc<=radius;dc++){
+        const row=[0.5*dr*dr,dr*dc,0.5*dc*dc,dr,dc,1];
+        const z=sampleArrayBilinearWrap(R,n,pos[0]+dr,pos[1]+dc); const w=Math.exp(-(dr*dr+dc*dc)/(2*sig*sig));
+        rows.push(row);vals.push(z);weights.push(w);
+        for(let a=0;a<m;a++){ATz[a]+=w*row[a]*z;for(let b=0;b<m;b++)ATA[a][b]+=w*row[a]*row[b];}
+      }
+      const coef=solveLinearSystem(ATA,ATz); if(!coef)return {valid:false,reason:"rank_deficient"};
+      let mse=0,sw=0,minv=Infinity,maxv=-Infinity;
+      for(let i=0;i<rows.length;i++){let pred=0;for(let j=0;j<m;j++)pred+=rows[i][j]*coef[j];const e=vals[i]-pred;mse+=weights[i]*e*e;sw+=weights[i];minv=Math.min(minv,vals[i]);maxv=Math.max(maxv,vals[i]);}
+      const H=[[coef[0],coef[1]],[coef[1],coef[2]]],g=[coef[3],coef[4]];
+      const tr=H[0][0]+H[1][1],detH=H[0][0]*H[1][1]-H[0][1]*H[1][0],disc=Math.max(0,tr*tr-4*detH);
+      const eig=[0.5*(tr-Math.sqrt(disc)),0.5*(tr+Math.sqrt(disc))];
+      return {valid:true,hessian:H,gradient:g,constant:coef[5],eigenvalues:eig,normalizedRmse:Math.sqrt(mse/Math.max(sw,1e-12))/Math.max(maxv-minv,1e-12)};
+    }
+
+    function isNegativeDefinite4(Q,tol=1e-10) {
+      // Cholesky of -Q.
+      const L=Array.from({length:4},()=>new Array(4).fill(0));
+      for(let i=0;i<4;i++)for(let j=0;j<=i;j++){
+        let sum=-Q[i][j];for(let k=0;k<j;k++)sum-=L[i][k]*L[j][k];
+        if(i===j){if(!(sum>tol))return false;L[i][j]=Math.sqrt(sum);}else L[i][j]=sum/L[j][j];
+      }
+      return true;
+    }
+
+    function quadValue4(gamma,b,Q,z){let v=gamma;for(let i=0;i<4;i++)v+=b[i]*z[i];for(let i=0;i<4;i++)for(let j=0;j<4;j++)v+=0.5*z[i]*Q[i][j]*z[j];return v;}
+
+    function maximizeConcaveQuadraticBoxJS(Q,b,gamma,h) {
+      if(!isNegativeDefinite4(Q))return null; let best=null;
+      for(let code=0;code<81;code++){
+        let q=code,status=[],z=[0,0,0,0],free=[],active=[];
+        for(let i=0;i<4;i++){const d=q%3;q=Math.floor(q/3);const st=d-1;status.push(st);if(st===0)free.push(i);else{active.push(i);z[i]=st<0?-h:h;}}
+        if(free.length){const A=free.map(i=>free.map(j=>Q[i][j]));const rhs=free.map(i=>{let r=-b[i];for(const j of active)r-=Q[i][j]*z[j];return r;});const sol=solveLinearSystem(A,rhs);if(!sol)continue;let feasible=true;for(let k=0;k<free.length;k++){if(sol[k]<-h-1e-8||sol[k]>h+1e-8){feasible=false;break;}z[free[k]]=sol[k];}if(!feasible)continue;}
+        const grad=new Array(4).fill(0).map((_,i)=>b[i]+Q[i][0]*z[0]+Q[i][1]*z[1]+Q[i][2]*z[2]+Q[i][3]*z[3]);
+        let ok=true;for(let i=0;i<4;i++){if(status[i]===0&&Math.abs(grad[i])>1e-5)ok=false;if(status[i]<0&&grad[i]>1e-5)ok=false;if(status[i]>0&&grad[i]<-1e-5)ok=false;}if(!ok)continue;
+        const val=quadValue4(gamma,b,Q,z);if(!best||val>best.value)best={value:val,z,status};
+      }
+      return best;
+    }
+
+    function jointQuadraticPairJS(R,n,uPos,vPos,kwargs) {
+      const center=[Math.floor(n/2),Math.floor(n/2)],h=Number(kwargs.searchRadius??1.5),rad=Math.floor(kwargs.fitRadius??2);
+      const u0=toCenteredOffset(uPos,n,center),v0=toCenteredOffset(vPos,n,center),w0=[u0[0]-v0[0],u0[1]-v0[1]],wPos=[center[0]+w0[0],center[1]+w0[1]];
+      const fits=[fitQuadraticLocalJS(R,n,uPos,rad),fitQuadraticLocalJS(R,n,vPos,rad),fitQuadraticLocalJS(R,n,wPos,rad)];if(fits.some(f=>!f.valid))return null;
+      const Ms=[[[1,0,0,0],[0,1,0,0]],[[0,0,1,0],[0,0,0,1]],[[1,0,-1,0],[0,1,0,-1]]];
+      const Q=Array.from({length:4},()=>new Array(4).fill(0)),b=[0,0,0,0];let gamma=0;
+      for(let fidx=0;fidx<3;fidx++){const M=Ms[fidx],H=fits[fidx].hessian,g=fits[fidx].gradient;gamma+=2*fits[fidx].constant;
+        for(let i=0;i<4;i++){b[i]+=2*(M[0][i]*g[0]+M[1][i]*g[1]);for(let j=0;j<4;j++){let v=0;for(let a=0;a<2;a++)for(let bb=0;bb<2;bb++)v+=M[a][i]*H[a][bb]*M[bb][j];Q[i][j]+=2*v;}}
+      }
+      const sol=maximizeConcaveQuadraticBoxJS(Q,b,gamma,h);if(!sol)return null;const z=sol.z,du=[z[0],z[1]],dv=[z[2],z[3]];const u=[u0[0]+du[0],u0[1]+du[1]],v=[v0[0]+dv[0],v0[1]+dv[1]],w=[u[0]-v[0],u[1]-v[1]];
+      return {score:sol.value,u,v,w,method:"quadratic",diagnostics:{fits,activeStatus:sol.status}};
+    }
+
+    function tpsPhiJS(r){return r>0?r*r*Math.log(r):0;}
+    const tpsSystemCache=new Map();
+    function luDecomposeJS(A){const n=A.length,LU=A.map(r=>r.slice()),piv=Array.from({length:n},(_,i)=>i);for(let k=0;k<n;k++){let p=k,b=Math.abs(LU[k][k]);for(let i=k+1;i<n;i++){const v=Math.abs(LU[i][k]);if(v>b){b=v;p=i;}}if(b<1e-12)return null;if(p!==k){[LU[p],LU[k]]=[LU[k],LU[p]];[piv[p],piv[k]]=[piv[k],piv[p]];}for(let i=k+1;i<n;i++){LU[i][k]/=LU[k][k];for(let j=k+1;j<n;j++)LU[i][j]-=LU[i][k]*LU[k][j];}}return{LU,piv};}
+    function luSolveJS(fac,b){const {LU,piv}=fac,n=LU.length,x=new Array(n);for(let i=0;i<n;i++)x[i]=b[piv[i]];for(let i=0;i<n;i++)for(let j=0;j<i;j++)x[i]-=LU[i][j]*x[j];for(let i=n-1;i>=0;i--){for(let j=i+1;j<n;j++)x[i]-=LU[i][j]*x[j];x[i]/=LU[i][i];}return x;}
+    function getTpsSystemJS(radius,lambda){const key=`${radius}|${lambda}`;if(tpsSystemCache.has(key))return tpsSystemCache.get(key);const nodes=[];for(let dr=-radius;dr<=radius;dr++)for(let dc=-radius;dc<=radius;dc++)nodes.push([dr,dc]);const N=nodes.length,m=N+3,A=Array.from({length:m},()=>new Array(m).fill(0));for(let i=0;i<N;i++){for(let j=0;j<N;j++)A[i][j]=tpsPhiJS(Math.hypot(nodes[i][0]-nodes[j][0],nodes[i][1]-nodes[j][1]))+(i===j?lambda:0);A[i][N]=1;A[i][N+1]=nodes[i][0];A[i][N+2]=nodes[i][1];A[N][i]=1;A[N+1][i]=nodes[i][0];A[N+2][i]=nodes[i][1];}const fac=luDecomposeJS(A);const obj={nodes,N,fac};tpsSystemCache.set(key,obj);return obj;}
+    function fitTpsLocalJS(R,n,pos,radius,lambda){const sys=getTpsSystemJS(radius,lambda);if(!sys.fac)return null;const rhs=new Array(sys.N+3).fill(0);for(let i=0;i<sys.N;i++)rhs[i]=sampleArrayBilinearWrap(R,n,pos[0]+sys.nodes[i][0],pos[1]+sys.nodes[i][1]);const c=luSolveJS(sys.fac,rhs);return{nodes:sys.nodes,beta:c.slice(0,sys.N),a:c.slice(sys.N)};}
+    function evalTpsJS(m,r){let v=m.a[0]+m.a[1]*r[0]+m.a[2]*r[1];for(let i=0;i<m.nodes.length;i++)v+=m.beta[i]*tpsPhiJS(Math.hypot(r[0]-m.nodes[i][0],r[1]-m.nodes[i][1]));return v;}
+    function boundedCoordinateMaxJS(fun,z0,h){let z=z0.slice(),best=fun(z),step=Math.max(h/2,0.25);while(step>1e-3){let improved=false;for(let d=0;d<4;d++)for(const sg of [-1,1]){const q=z.slice();q[d]=clamp(q[d]+sg*step,-h,h);const v=fun(q);if(v>best){best=v;z=q;improved=true;}}if(!improved)step*=0.5;}return{z,value:best};}
+    function jointTpsPairJS(R,n,uPos,vPos,kwargs){const center=[Math.floor(n/2),Math.floor(n/2)],h=Number(kwargs.searchRadius??1.5),rad=Math.floor(kwargs.fitRadius??2),lam=Number(kwargs.tpsLambda??0.001);const u0=toCenteredOffset(uPos,n,center),v0=toCenteredOffset(vPos,n,center),w0=[u0[0]-v0[0],u0[1]-v0[1]],wPos=[center[0]+w0[0],center[1]+w0[1]];const su=fitTpsLocalJS(R,n,uPos,rad,lam),sv=fitTpsLocalJS(R,n,vPos,rad,lam),sw=fitTpsLocalJS(R,n,wPos,rad,lam);if(!su||!sv||!sw)return null;const energy=z=>2*(evalTpsJS(su,[z[0],z[1]])+evalTpsJS(sv,[z[2],z[3]])+evalTpsJS(sw,[z[0]-z[2],z[1]-z[3]]));const steps=Math.max(2,Math.floor(kwargs.tpsCoarseSteps??3)),gv=[];for(let i=0;i<steps;i++)gv.push(-h+2*h*i/(steps-1));const seeds=[];for(const a of gv)for(const b of gv)for(const c of gv)for(const d of gv){const z=[a,b,c,d];seeds.push({z,value:energy(z)});}seeds.sort((x,y)=>y.value-x.value);const starts=[[0,0,0,0],...seeds.slice(0,Math.floor(kwargs.tpsMultiStarts??6)).map(q=>q.z)];let best=null;for(const z0 of starts){const q=boundedCoordinateMaxJS(energy,z0,h);if(!best||q.value>best.value)best=q;}if(!best)return null;const z=best.z,u=[u0[0]+z[0],u0[1]+z[1]],v=[v0[0]+z[2],v0[1]+z[3]],w=[u[0]-v[0],u[1]-v[1]];return{score:best.value,u,v,w,method:"tps",diagnostics:{lambda:lam,boundary:z.some(v=>Math.abs(Math.abs(v)-h)<1e-3)}};}
+
+    function findHexagonJS(R,n,kwargs) {
+      const candidates=detectCandidatesSubpixelJS(R,n,kwargs);if(candidates.length<2)return null;
+      const center=[Math.floor(n/2),Math.floor(n/2)],minDist=Number(kwargs.minDist??3),anti=Number(kwargs.antipodalTol??2),amin=Math.sin(degToRad(Number(kwargs.angleMinDeg??12))),rw=Number(kwargs.wExcludeCenterRadius??kwargs.excludeCenterRadius??7);
+      const Rs=gaussianSmoothPeriodicJS(R,n,Number(kwargs.energyBlurSigma??1));let best=null;
+      for(let i=0;i<candidates.length-1;i++)for(let j=i+1;j<candidates.length;j++){
+        const up=candidates[i],vp=candidates[j];if(torusDistance(up,vp,n)<minDist)continue;const u=toCenteredOffset(up,n,center),v=toCenteredOffset(vp,n,center);if(Math.hypot(u[0]+v[0],u[1]+v[1])<anti)continue;const nu=Math.hypot(...u),nv=Math.hypot(...v);if(nu<1e-9||nv<1e-9)continue;if(Math.abs(u[0]*v[1]-u[1]*v[0])/(nu*nv)<amin)continue;if(Math.hypot(u[0]-v[0],u[1]-v[1])<rw)continue;
+        const q=(String(kwargs.refinementMethod||"quadratic").toLowerCase()==="tps")?jointTpsPairJS(Rs,n,up,vp,kwargs):jointQuadraticPairJS(Rs,n,up,vp,kwargs);if(q&&Number.isFinite(q.score)&&(!best||q.score>best.score)){best={...q,pairIndices:[i,j]};}
+      }
+      if(!best)return null;return{u_fin:best.u,v_fin:best.v,w_fin:best.w,energy_final:best.score,score:best.score,ok:true,method:best.method,pair_indices:best.pairIndices,integer_candidates:candidates,hex6_centered:[best.u,[-best.u[0],-best.u[1]],best.v,[-best.v[0],-best.v[1]],best.w,[-best.w[0],-best.w[1]]],joint_diagnostics:best.diagnostics};
+    }
+
+    // ---------------- 8-DOF homography: positions + Jacobians ----------------
+    function thetaToHomography8JS(t){return[[t[0],t[1],t[2]],[t[3],t[4],t[5]],[t[6],t[7],1.0]];}
+    function homographyFromPointPairsLSJS(src,dst){if(src.length<4)return null;const p=8,ATA=Array.from({length:p},()=>new Array(p).fill(0)),ATb=new Array(p).fill(0);for(let i=0;i<src.length;i++){const x=src[i][0],y=src[i][1],u=dst[i][0],v=dst[i][1],rows=[[x,y,1,0,0,0,-u*x,-u*y],[0,0,0,x,y,1,-v*x,-v*y]],bs=[u,v];for(let rr=0;rr<2;rr++)for(let a=0;a<p;a++){ATb[a]+=rows[rr][a]*bs[rr];for(let b=0;b<p;b++)ATA[a][b]+=rows[rr][a]*rows[rr][b];}}for(let i=0;i<p;i++)ATA[i][i]+=1e-10;const t=solveLinearSystem(ATA,ATb);return t?thetaToHomography8JS(t):null;}
+    function jointHomographyResidualJS(theta,items,sigmaX=1.0,sigmaJ=0.05,lambdaJ=1.0){const G=thetaToHomography8JS(theta),out=[];for(const item of items){const y=[item.center.x,item.center.y],x=[item.referenceCenter.x,item.referenceCenter.y],B=item.Arect;let gx;try{gx=applyHomographyPoint(G,y);}catch(e){gx=[1e6,1e6];}out.push((gx[0]-x[0])/sigmaX,(gx[1]-x[1])/sigmaX);try{const J=jacobianHomographyAtInput(G,y[0],y[1]),s=Math.sqrt(lambdaJ)/sigmaJ;out.push(s*(J[0][0]-B[0][0]),s*(J[0][1]-B[0][1]),s*(J[1][0]-B[1][0]),s*(J[1][1]-B[1][1]));}catch(e){out.push(1e6,1e6,1e6,1e6);}}return out;}
+    function optimizeJointHomographyFromValidatedJS(items,maxIter=120){const src=items.map(i=>[i.center.x,i.center.y]),dst=items.map(i=>[i.referenceCenter.x,i.referenceCenter.y]);const G0=homographyFromPointPairsLSJS(src,dst);if(!G0)return null;let x=[G0[0][0],G0[0][1],G0[0][2],G0[1][0],G0[1][1],G0[1][2],G0[2][0],G0[2][1]],lambda=1e-3;const sigmaX=1.0,sigmaJ=0.05,lambdaJ=1.0,deltaHuber=2.0;let r=jointHomographyResidualJS(x,items,sigmaX,sigmaJ,lambdaJ),cost=Infinity,itDone=0;const robustCost=a=>a.reduce((s,v)=>{const av=Math.abs(v);return s+(av<=deltaHuber?0.5*v*v:deltaHuber*(av-0.5*deltaHuber));},0)/Math.max(1,a.length);cost=robustCost(r);for(let it=0;it<maxIter;it++){itDone=it+1;const m=r.length,pn=8,J=Array.from({length:m},()=>new Array(pn).fill(0));for(let j=0;j<pn;j++){const eps=1e-6*Math.max(1,Math.abs(x[j])),xp=x.slice(),xm=x.slice();xp[j]+=eps;xm[j]-=eps;const rp=jointHomographyResidualJS(xp,items,sigmaX,sigmaJ,lambdaJ),rm=jointHomographyResidualJS(xm,items,sigmaX,sigmaJ,lambdaJ);for(let i=0;i<m;i++)J[i][j]=(rp[i]-rm[i])/(2*eps);}const ATA=Array.from({length:pn},()=>new Array(pn).fill(0)),ATr=new Array(pn).fill(0);for(let i=0;i<m;i++){const av=Math.abs(r[i]),w=av<=deltaHuber?1:deltaHuber/Math.max(av,1e-12);for(let a=0;a<pn;a++){ATr[a]+=w*J[i][a]*r[i];for(let b=0;b<pn;b++)ATA[a][b]+=w*J[i][a]*J[i][b];}}for(let a=0;a<pn;a++)ATA[a][a]+=lambda;const d=solveLinearSystem(ATA,ATr.map(v=>-v));if(!d)break;const xt=x.map((v,i)=>v+d[i]),rt=jointHomographyResidualJS(xt,items,sigmaX,sigmaJ,lambdaJ),ct=robustCost(rt);if(ct<cost){x=xt;r=rt;cost=ct;lambda*=0.6;if(Math.sqrt(d.reduce((s,v)=>s+v*v,0))<1e-8)break;}else lambda*=2.5;}
+      return{H_3x3:thetaToHomography8JS(x),cost,info:{success:true,iterations:itDone,model:"8DOF_positions_plus_jacobians",robust_loss:"Huber",sigma_x_px:sigmaX,sigma_J:sigmaJ,lambda_J:lambdaJ,uses_ground_truth:false}};}
+
+    // ---------------- Robustness recording: GT is evaluation-only ----------------
+    // IMPORTANT: every function below this boundary may read the synthetic ground truth
+    // ONLY after local affinities and the global homography have already been estimated.
+    // No value computed here is allowed to feed peak detection, joint refinement,
+    // affinity assignment, phase-correlation selection, or homography optimization.
+    const ROBUSTNESS_STORAGE_KEY="phd_homography_robustness_v1";
+    function normalizeH33JS(H){if(!H)return null;const s=Math.abs(H[2][2])>1e-12?H[2][2]:1;return H.map(row=>row.map(v=>v/s));}
+    function frobMat3DiffJS(A,B){if(!A||!B)return null;const a=normalizeH33JS(A),b=normalizeH33JS(B);let s0=0;for(let i=0;i<3;i++)for(let j=0;j<3;j++){const d=a[i][j]-b[i][j];s0+=d*d;}return Math.sqrt(s0);}
+    function localGtComparisonForItemJS(item,Htrue,Gtrue,Hestimated,Gestimated){
+      const y=[item.center.x,item.center.y];
+      const xgt=applyHomographyPoint(Gtrue,y);
+      const JHgt=jacobianHomographyAtInput(Htrue,xgt[0],xgt[1]);
+      const JGgt=jacobianHomographyAtInput(Gtrue,y[0],y[1]);
+      const Aest=item.M, Best=item.Arect;
+      const eAf=mat2DifferenceFroJS(Aest,JHgt);
+      const eBi=mat2DifferenceFroJS(Best,JGgt);
+      let eGH=null,eGG=null;
+      if(Hestimated) eGH=mat2DifferenceFroJS(jacobianHomographyAtInput(Hestimated,xgt[0],xgt[1]),JHgt);
+      if(Gestimated) eGG=mat2DifferenceFroJS(jacobianHomographyAtInput(Gestimated,y[0],y[1]),JGgt);
+      return {
+        center_deformed_xy:y,
+        center_reference_gt_xy:xgt,
+        center_reference_phase_xy:item.referenceCenter?[item.referenceCenter.x,item.referenceCenter.y]:null,
+        patch_size_px:item.patchSize,
+        refinement_method:item.detection?.method||state.peakDetection.refinementMethod,
+        A_est_source_to_deformed:Aest,
+        JH_gt_source_to_deformed:JHgt,
+        B_est_deformed_to_source:Best,
+        JG_gt_deformed_to_source:JGgt,
+        local_forward_affinity_fro_error:eAf,
+        local_forward_affinity_relative_fro_error:eAf/(mat2Frobenius(JHgt)+1e-12),
+        local_inverse_affinity_fro_error:eBi,
+        local_inverse_affinity_relative_fro_error:eBi/(mat2Frobenius(JGgt)+1e-12),
+        global_forward_jacobian_fro_error:eGH,
+        global_inverse_jacobian_fro_error:eGG,
+        phase_score:item.phaseScore,
+        phase_ratio:item.phaseRatioToSecond,
+        cyclic_shift:item.orderShift,
+        hexagon_residual_relative:item.residualRelative,
+        affinity_condition_number:item.conditionNumber,
+        affinity_determinant:item.det
+      };
+    }
+
+    function recordCurrentHomographyRobustnessTest(){
+      if(state.testMode!=="synthetic"||state.projectionModes[state.projectionIndex]!=="Perspective"){
+        setValidationMessage("Robustness record requires synthetic Perspective mode");return;
+      }
+      if(!state.globalHomography||state.validatedAffinities.length<4){
+        setValidationMessage("Estimate a homography from at least 4 validated patches first");return;
+      }
+      // Ground truth starts HERE, strictly after estimation.
+      const Htrue=computeTrueDeformationHomographySourceToDisplayed();
+      const Gtrue=Htrue?invert3x3(Htrue):null;
+      const Gestimated=state.globalHomography;
+      const Hestimated=computeEstimatedDeformationHomographySourceToDisplayed();
+      if(!Htrue||!Gtrue||!Hestimated){setValidationMessage("Ground-truth/evaluated homography unavailable");return;}
+      const locals=state.validatedAffinities.map(it=>localGtComparisonForItemJS(it,Htrue,Gtrue,Hestimated,Gestimated));
+      const transfer=computeHomographyTransferMetrics200x200(Htrue,Hestimated);
+      const corners=computeCornerTransferMetricsJS(Htrue,Hestimated);
+      const photometric=computePhotometricRectificationMetrics200x200JS();
+      const rec={
+        test_id:`H_${Date.now()}`,created_at:new Date().toISOString(),
+        angle_view_x_deg:Number(state.perspective.angleViewXDeg),angle_view_y_deg:Number(state.perspective.angleViewYDeg),
+        focal:Number(state.perspective.focal),refinement_method:String(state.peakDetection.refinementMethod),
+        tps_lambda:Number(state.peakDetection.tpsLambda),validated_patches:locals.length,
+        patch_sizes_px:locals.map(x=>x.patch_size_px),manual_patch_selection:true,automatic_multiscale_search:false,
+        true_H_source_to_deformed:Htrue,estimated_G_deformed_to_source:Gestimated,estimated_H_source_to_deformed:Hestimated,
+        homography_fro_error_full_normalized:frobMat3DiffJS(Htrue,Hestimated),
+        transfer_error_200x200:transfer,corner_transfer_error:corners,photometric_rectification_error_200x200:photometric,
+        mean_local_forward_affinity_fro_error:meanFiniteJS(locals.map(x=>x.local_forward_affinity_fro_error)),
+        mean_local_forward_affinity_relative_fro_error:meanFiniteJS(locals.map(x=>x.local_forward_affinity_relative_fro_error)),
+        mean_local_inverse_affinity_fro_error:meanFiniteJS(locals.map(x=>x.local_inverse_affinity_fro_error)),
+        mean_local_inverse_affinity_relative_fro_error:meanFiniteJS(locals.map(x=>x.local_inverse_affinity_relative_fro_error)),
+        mean_global_forward_jacobian_fro_error:meanFiniteJS(locals.map(x=>x.global_forward_jacobian_fro_error)),
+        mean_global_inverse_jacobian_fro_error:meanFiniteJS(locals.map(x=>x.global_inverse_jacobian_fro_error)),
+        local_comparisons:locals,solver_info:state.globalHomographyInfo
+      };
+      state.homographyRobustnessRecords.push(rec);
+      try{localStorage.setItem(ROBUSTNESS_STORAGE_KEY,JSON.stringify(state.homographyRobustnessRecords));}catch(e){}
+      setValidationMessage(`Homography test recorded (${state.homographyRobustnessRecords.length}) | X=${rec.angle_view_x_deg}° Y=${rec.angle_view_y_deg}° | symmetric RMSE=${transfer?.symmetric_rmse_px?.toFixed?.(3)??"?"} px`);
+    }
+
+    function meanFiniteJS(a){const v=a.filter(Number.isFinite);return v.length?v.reduce((s,x)=>s+x,0)/v.length:null;}
+    function csvEscapeJS(v){if(v===null||v===undefined)return"";const s=typeof v==="number"?String(v):String(v);return /[",\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s;}
+    function exportHomographyRobustnessCSV(){
+      const rows=[["test_id","created_at","angle_x_deg","angle_y_deg","focal","refiner","tps_lambda","n_patches","patch_index","patch_x_def","patch_y_def","patch_size_px","local_A_vs_JH_gt_fro","local_A_vs_JH_gt_rel_fro","local_Ainv_vs_JG_gt_fro","local_Ainv_vs_JG_gt_rel_fro","global_JH_vs_gt_fro","global_JG_vs_gt_fro","phase_score","phase_ratio","hexagon_residual_relative","affinity_condition_number","affinity_determinant","global_H_fro_error","forward_transfer_rmse_px","symmetric_transfer_rmse_px","corner_transfer_mean_px","photometric_mae_gray"]];
+      for(const r of state.homographyRobustnessRecords) for(let i=0;i<r.local_comparisons.length;i++){
+        const l=r.local_comparisons[i],t=r.transfer_error_200x200||{},c=r.corner_transfer_error||{},p=r.photometric_rectification_error_200x200||{};
+        rows.push([r.test_id,r.created_at,r.angle_view_x_deg,r.angle_view_y_deg,r.focal,r.refinement_method,r.tps_lambda,r.validated_patches,i+1,l.center_deformed_xy[0],l.center_deformed_xy[1],l.patch_size_px,l.local_forward_affinity_fro_error,l.local_forward_affinity_relative_fro_error,l.local_inverse_affinity_fro_error,l.local_inverse_affinity_relative_fro_error,l.global_forward_jacobian_fro_error,l.global_inverse_jacobian_fro_error,l.phase_score,l.phase_ratio,l.hexagon_residual_relative,l.affinity_condition_number,l.affinity_determinant,r.homography_fro_error_full_normalized,t.forward_rmse_px,t.symmetric_rmse_px,c.mean_px,p.mae_gray]);
+      }
+      if(rows.length===1){setValidationMessage("No recorded homography robustness test");return;}
+      downloadTextFile("homography_robustness_dataset.csv",rows.map(r=>r.map(csvEscapeJS).join(",")).join("\n"),"text/csv");
+    }
+
+    try{const saved=JSON.parse(localStorage.getItem(ROBUSTNESS_STORAGE_KEY)||"[]");if(Array.isArray(saved))state.homographyRobustnessRecords=saved;}catch(e){state.homographyRobustnessRecords=[];}
+
     // =========================================================
     // EVENTS
     // =========================================================
@@ -4710,7 +3996,7 @@
       btnToggleRectification.addEventListener("click", () => {
         if (!state.rectificationImageData) recomputeRectification();
         if (!state.rectificationImageData) {
-          setValidationMessage("Need at least 3 validated affinities");
+          setValidationMessage("Need at least 4 validated affinities");
           refreshRectificationUI();
           redrawMainCanvas();
           return;
@@ -4748,6 +4034,29 @@
 
     if (btnSavePeaksDetails) {
       btnSavePeaksDetails.addEventListener("click", () => saveValidatedPeaksDetails());
+    }
+
+    if (btnRecordHomographyTest) {
+      btnRecordHomographyTest.addEventListener("click", () => recordCurrentHomographyRobustnessTest());
+    }
+    if (btnExportHomographyTests) {
+      btnExportHomographyTests.addEventListener("click", () => exportHomographyRobustnessCSV());
+    }
+    if (peakRefinementMethod) {
+      peakRefinementMethod.addEventListener("change", () => {
+        state.peakDetection.refinementMethod = peakRefinementMethod.value === "tps" ? "tps" : "quadratic";
+        clearValidatedAffinities();
+        if (state.autocorrEnabled) schedulePreviewRender();
+      });
+    }
+    if (tpsLambdaControl) {
+      tpsLambdaControl.addEventListener("change", () => {
+        const v = Number(tpsLambdaControl.value);
+        if (Number.isFinite(v) && v >= 0) state.peakDetection.tpsLambda = v;
+        if (valTpsLambda) valTpsLambda.textContent = String(state.peakDetection.tpsLambda);
+        clearValidatedAffinities();
+        if (state.autocorrEnabled) schedulePreviewRender();
+      });
     }
 
     if (btnClearAffinities) {

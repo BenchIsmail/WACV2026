@@ -2285,7 +2285,6 @@
       if (imgToDraw) ctx.putImageData(imgToDraw, 0, 0);
 
       drawTriangulationOverlay();
-      drawValidatedAffinityMarkers();
 
       // Patch overlay: visible only on the deformed view, because validation is done
       // on the deformed image. The center cross is drawn explicitly so the locked
@@ -2315,6 +2314,9 @@
         ctx.fill();
         ctx.restore();
       }
+
+      // Validated centers are always drawn last, above the active green patch overlay.
+      drawValidatedAffinityMarkers();
     }
 
     // =========================================================
@@ -2333,13 +2335,37 @@
     }
 
     function getDisplayedDetectionForValidation() {
-      const p = getActivePatchCenter();
-      const patchSize = state.patchSize;
-      const computeSize = Math.min(state.previewComputeSize, patchSize);
-      if (state.lastDetection && state.lastDetection.u_fin && state.lastDetection.v_fin && state.lastDetection.w_fin) {
-        return { detection: state.lastDetection, computeSize, center: p };
+      // STRICT MANUAL VALIDATION: use exactly the detection that produced the
+      // hexagon currently visible in the autocorrelation preview. Never rerun
+      // peak detection from this function.
+      const active = getActivePatchCenter();
+      const shownCenter = state.lastDetectionCenter;
+      const shownPatchSize = state.lastDetectionPatchSize;
+      const shownComputeSize = state.lastDetectionComputeSize;
+      const detection = state.lastDetection;
+
+      const sameCenter = shownCenter
+        && Math.hypot(shownCenter.x - active.x, shownCenter.y - active.y) <= 1e-6;
+      const samePatch = shownPatchSize === state.patchSize;
+      const validDetection = detection && detection.u_fin && detection.v_fin && detection.w_fin;
+
+      if (!validDetection || !sameCenter || !samePatch || !Number.isFinite(shownComputeSize)) {
+        return {
+          detection: null,
+          computeSize: Number.isFinite(shownComputeSize) ? shownComputeSize : state.patchSize,
+          center: shownCenter ? { ...shownCenter } : { ...active },
+          patchSize: shownPatchSize,
+          stale: true
+        };
       }
-      return { detection: null, computeSize, center: p };
+
+      return {
+        detection,
+        computeSize: shownComputeSize,
+        center: { ...shownCenter },
+        patchSize: shownPatchSize,
+        stale: false
+      };
     }
 
     function angleXY(v) {
@@ -2941,6 +2967,11 @@
       for (const baseCandidate of assignmentCandidates) {
         const M = baseCandidate.M;
         if (!M) continue;
+
+        // Thesis order: hard geometric filters before expensive whole-image phase correlation.
+        const geom = geometryValidityForAffinityCandidate(baseCandidate);
+        if (!geom.valid) continue;
+
         const Arect = mat2Inv(M);
         if (!Arect) continue;
         const rectifiedPatch = rectifyPatchWithMatrix(state.displayedImageData, center.x, center.y, state.patchSize, M);
@@ -2951,6 +2982,8 @@
           ...baseCandidate,
           M,
           Arect,
+          det: geom.det,
+          conditionNumber: geom.cond,
           phaseScore: wholeRefMatch.score,
           rectifiedPatch,
           center: { ...center },
@@ -3333,9 +3366,8 @@
 
       const anchorDef = averageValidatedCenter();
       const anchorRefFromMatches = averageValidatedReferenceCenter();
-      const anchorRefMapped = state.testMode === "real" ? null : mapDisplayToSource(anchorDef[0], anchorDef[1]);
-      const anchorRef = anchorRefFromMatches
-        || (anchorRefMapped ? [anchorRefMapped.x, anchorRefMapped.y] : anchorDef);
+      // No GT/projection mapping in estimation: use only phase-correlated reference centers.
+      const anchorRef = anchorRefFromMatches || anchorDef;
       const Hanchored = anchorHomographyAtSourcePoint(opt.H_3x3, anchorDef, anchorRef);
 
       state.rectificationTransform = opt;
@@ -3355,11 +3387,15 @@
     function validateCurrentAffinity() {
       if (!state.autocorrEnabled) state.autocorrEnabled = true;
       if (!state.peaksEnabled) state.peaksEnabled = true;
-
-      // The current patch size is the manually selected p_min.
-      // Detect Peaks stays ON while p changes, so this redraw validates exactly what is visible.
-      const p = getActivePatchCenter();
-      renderAutocorrelationAt(p.x, p.y);
+      // Detect Peaks stays ON while the user adjusts p. Validate EXACTLY the
+      // hexagon that is currently displayed. Do not recompute peaks here.
+      const shown = getDisplayedDetectionForValidation();
+      if (!shown.detection || shown.stale) {
+        setValidationMessage("Displayed peaks are not current. Keep Detect Peaks ON, adjust/wait for the preview, then Validate Affinity.");
+        refreshRectificationUI();
+        redrawMainCanvas();
+        return;
+      }
 
       const estimate = estimateCurrentAffinityFromDetection();
       state.lastAffinityEstimate = estimate;
@@ -4221,6 +4257,9 @@
         // No GT/Jacobian is read in this path.
         const detection = findHexagonJS(ac, computeSize, state.peakDetection);
         state.lastDetection = detection;
+        state.lastDetectionPatchSize = patchSize;
+        state.lastDetectionComputeSize = computeSize;
+        state.lastDetectionCenter = { x: cx, y: cy };
         state.lastAffinityEstimate = null; // only Validate Affinity computes/selects A
         const foundPeaks = hexResultToPreviewPeaks(detection, computeSize);
         drawPeakOverlayOnPreview(foundPeaks, computeSize, computeSize, detection);
@@ -5099,7 +5138,23 @@
     }
 
     if (btnValidateAffinity) {
-      btnValidateAffinity.addEventListener("click", () => validateCurrentAffinity());
+      btnValidateAffinity.addEventListener("click", () => {
+        if (btnValidateAffinity.disabled) return;
+        btnValidateAffinity.disabled = true;
+        setValidationMessage("Validating affinity...");
+        setTimeout(() => {
+          try {
+            validateCurrentAffinity();
+          } catch (err) {
+            console.error("Validate Affinity failed", err);
+            setValidationMessage(`Validation error: ${err && err.message ? err.message : err}`);
+          } finally {
+            btnValidateAffinity.disabled = false;
+            refreshRectificationUI();
+            redrawMainCanvas();
+          }
+        }, 20);
+      });
     }
 
     if (btnToggleRectification) {

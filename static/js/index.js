@@ -4575,17 +4575,214 @@
       }, 0);
     }
 
+    function mat2FrobeniusError(A, B) {
+      if (!A || !B) return null;
+      let s = 0.0;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const a = Number(A[r][c]);
+          const b = Number(B[r][c]);
+          if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+          const d = a - b;
+          s += d * d;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function mat2FrobeniusNorm(A) {
+      if (!A) return null;
+      let s = 0.0;
+      for (let r = 0; r < 2; r++) {
+        for (let c = 0; c < 2; c++) {
+          const a = Number(A[r][c]);
+          if (!Number.isFinite(a)) return null;
+          s += a * a;
+        }
+      }
+      return Math.sqrt(s);
+    }
+
+    function extractFirstTwoHomographyColumns(H) {
+      if (!H) return null;
+      const out = [];
+      for (let r = 0; r < 3; r++) {
+        const a = Number(H[r][0]);
+        const b = Number(H[r][1]);
+        if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+        out.push([a, b]);
+      }
+      return out;
+    }
+
+    function compareHomographiesFirstTwoColumnsOnly(Hgt, Hest) {
+      // IMPORTANT: the third column is NEVER used here.
+      // We compare only
+      //       [h11 h12]
+      //       [h21 h22]
+      //       [h31 h32]
+      // and estimate the unavoidable homogeneous scale from these six values only.
+      // Thus [h13,h23,h33]^T (translation / third column) cannot influence the error.
+      const G = extractFirstTwoHomographyColumns(Hgt);
+      const E = extractFirstTwoHomographyColumns(Hest);
+      if (!G || !E) return null;
+
+      let dotGE = 0.0;
+      let dotEE = 0.0;
+      let normG2 = 0.0;
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 2; c++) {
+          dotGE += G[r][c] * E[r][c];
+          dotEE += E[r][c] * E[r][c];
+          normG2 += G[r][c] * G[r][c];
+        }
+      }
+      if (!Number.isFinite(dotEE) || dotEE < 1e-18 || normG2 < 1e-18) return null;
+
+      const scale = dotGE / dotEE;
+      let err2 = 0.0;
+      const colErr2 = [0.0, 0.0];
+      const colGt2 = [0.0, 0.0];
+      const Ealigned = [[0,0],[0,0],[0,0]];
+      for (let r = 0; r < 3; r++) {
+        for (let c = 0; c < 2; c++) {
+          const e = scale * E[r][c];
+          Ealigned[r][c] = e;
+          const d = e - G[r][c];
+          err2 += d * d;
+          colErr2[c] += d * d;
+          colGt2[c] += G[r][c] * G[r][c];
+        }
+      }
+
+      const absErr = Math.sqrt(err2);
+      const gtNorm = Math.sqrt(normG2);
+      return {
+        gt_first_two_columns_3x2: G.map(row => row.map(roundNumberForExport)),
+        estimated_first_two_columns_3x2: E.map(row => row.map(roundNumberForExport)),
+        estimated_first_two_columns_scale_aligned_3x2: Ealigned.map(row => row.map(roundNumberForExport)),
+        homogeneous_scale_fitted_from_first_two_columns_only: roundNumberForExport(scale),
+        frobenius_error_first_two_columns: roundNumberForExport(absErr),
+        relative_frobenius_error_first_two_columns: roundNumberForExport(absErr / gtNorm),
+        column_1_l2_error: roundNumberForExport(Math.sqrt(colErr2[0])),
+        column_2_l2_error: roundNumberForExport(Math.sqrt(colErr2[1])),
+        column_1_relative_l2_error: roundNumberForExport(Math.sqrt(colErr2[0]) / Math.sqrt(Math.max(colGt2[0], 1e-18))),
+        column_2_relative_l2_error: roundNumberForExport(Math.sqrt(colErr2[1]) / Math.sqrt(Math.max(colGt2[1], 1e-18))),
+        compared_entries: ['h11','h12','h21','h22','h31','h32'],
+        ignored_entries: ['h13','h23','h33'],
+        translation_column_used_in_error: false
+      };
+    }
+
+    function computeLocalAffinityRobustnessErrors(GtrueRectification) {
+      const rows = [];
+      for (let i = 0; i < (state.validatedAffinities || []).length; i++) {
+        const item = state.validatedAffinities[i];
+        if (!item || !item.Arect || !item.center || !GtrueRectification) continue;
+        let Jgt = null;
+        try {
+          Jgt = jacobianHomographyAtInput(GtrueRectification, item.center.x, item.center.y);
+        } catch (_) {
+          Jgt = null;
+        }
+        if (!Jgt) continue;
+        const absErr = mat2FrobeniusError(item.Arect, Jgt);
+        const gtNorm = mat2FrobeniusNorm(Jgt);
+        const relErr = (Number.isFinite(absErr) && Number.isFinite(gtNorm) && gtNorm > 1e-18)
+          ? absErr / gtNorm : null;
+        rows.push({
+          id: i + 1,
+          deformed_patch_center_xy: exportPoint(item.center),
+          patch_size_px: item.patchSize || state.patchSize,
+          estimated_local_rectification_affinity_2x2: exportMat2(item.Arect),
+          gt_rectification_jacobian_2x2: exportMat2(Jgt),
+          frobenius_error: roundNumberForExport(absErr),
+          relative_frobenius_error: roundNumberForExport(relErr),
+          translation_used_in_error: false
+        });
+      }
+
+      const rels = rows.map(r => Number(r.relative_frobenius_error)).filter(Number.isFinite);
+      const abss = rows.map(r => Number(r.frobenius_error)).filter(Number.isFinite);
+      const mean = arr => arr.length ? arr.reduce((a,b)=>a+b,0) / arr.length : null;
+      const max = arr => arr.length ? Math.max(...arr) : null;
+      return {
+        count: rows.length,
+        mean_frobenius_error: roundNumberForExport(mean(abss)),
+        max_frobenius_error: roundNumberForExport(max(abss)),
+        mean_relative_frobenius_error: roundNumberForExport(mean(rels)),
+        max_relative_frobenius_error: roundNumberForExport(max(rels)),
+        patches: rows
+      };
+    }
+
+    function makeRectificationRobustnessPayload() {
+      const deform = getCurrentDeformationParameters();
+      const HtrueDeformation = computeTrueDeformationHomographySourceToDisplayed();
+      const GtrueRectification = HtrueDeformation ? invert3x3(HtrueDeformation) : null;
+      const GestRectification = state.globalHomography || null;
+
+      const globalNoTranslation = (GtrueRectification && GestRectification)
+        ? compareHomographiesFirstTwoColumnsOnly(GtrueRectification, GestRectification)
+        : null;
+
+      return {
+        export_version: 1,
+        export_type: 'homography_rectification_robustness_no_translation',
+        created_at: new Date().toISOString(),
+        projection_mode: deform.mode,
+        deformation_parameters: deform.parameters,
+        texture_parameters: {
+          black_occupancy: state.texture.occupancy,
+          dilation_radius: state.texture.dilation,
+          shift_angle_deg: state.texture.angleShiftDeg,
+          shift_norm_px: state.texture.normShift,
+          gaussian_blur_sigma: state.texture.blurSigma
+        },
+        validated_affinities_count: state.validatedAffinities.length,
+        rectification_available: Boolean(GestRectification),
+        error_definition: {
+          main_metric: 'relative Frobenius error on the first two columns of the rectifying homography',
+          compared_columns: [1, 2],
+          ignored_column: 3,
+          ignored_translation_entries: ['h13', 'h23'],
+          note: 'The homogeneous scale is fitted using ONLY the first two columns. The third column is not used in the error, even for scale normalization.'
+        },
+        global_rectification: {
+          gt_rectifying_homography_deformed_to_source: exportMat3(GtrueRectification),
+          estimated_rectifying_homography_deformed_to_source: exportMat3(GestRectification),
+          error_first_two_columns_only: globalNoTranslation
+        },
+        local_affinity_errors_vs_gt_rectification_jacobian: computeLocalAffinityRobustnessErrors(GtrueRectification)
+      };
+    }
+
     function saveValidatedPeaksDetails() {
       if (!state.validatedAffinities || !state.validatedAffinities.length) {
-        setValidationMessage('No validated peak to save. Validate at least one affinity first.');
+        setValidationMessage('No validated affinity to save. Validate local affinities first.');
         return;
       }
-      const payload = makeValidatedPeaksExportPayload();
+      if (!state.globalHomography) {
+        setValidationMessage('Rectification is not available yet. Validate enough local affinities first.');
+        return;
+      }
+      const Htrue = computeTrueDeformationHomographySourceToDisplayed();
+      if (!Htrue) {
+        setValidationMessage('Ground-truth homography is available only for synthetic Affine/Perspective tests.');
+        return;
+      }
+
+      const payload = makeRectificationRobustnessPayload();
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
       const baseName = buildDeformationFilenameBase();
-      const filename = `${baseName}__patches_${payload.validated_count}__${stamp}.json`;
+      const filename = `rectification_errors__${baseName}__patches_${payload.validated_affinities_count}__${stamp}.json`;
       downloadTextFile(filename, JSON.stringify(payload, null, 2), 'application/json');
-      setValidationMessage(`Download started: ${filename}`);
+
+      const e = payload.global_rectification && payload.global_rectification.error_first_two_columns_only
+        ? payload.global_rectification.error_first_two_columns_only.relative_frobenius_error_first_two_columns
+        : null;
+      const eTxt = Number.isFinite(Number(e)) ? ` | relative error (cols 1-2)=${Number(e).toExponential(3)}` : '';
+      setValidationMessage(`Rectification robustness JSON saved${eTxt}. Translation column ignored.`);
     }
 
     // =========================================================
